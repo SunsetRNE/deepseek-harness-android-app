@@ -1,0 +1,112 @@
+/* DeepSeek Harness 移动端（横屏）触摸优化
+   叠加在 DSH 原生界面上，不删任何功能，只优化触屏体验 */
+:root {
+  /* 触摸友好：点击目标最小 40px */
+  --ds-mobile-tap: 40px;
+}
+
+/* 触屏：去掉 hover 依赖，扩大点击区域 */
+button, [role="button"], .icon-btn {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* 消息气泡在手机上不要太宽，留出呼吸感 */
+@media (max-width: 900px) {
+  html, body {
+    font-size: 15px;
+  }
+  /* 对话主体横向留白收紧，多给文字空间 */
+  .gdEzaW_userStack {
+    max-width: min(480px, 88%) !important;
+  }
+}
+
+/* 输入框触摸优化 */
+textarea, input[type="text"], input[type="search"] {
+  font-size: 16px !important; /* 16px 防止 iOS/部分安卓聚焦时缩放 */
+}
+
+/* 滚动条在触屏上更细、不占视觉 */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+}
+
+/* 侧栏折叠按钮（rail 上的图标）在触屏上更好点 */
+.hHd-Xa_iconButton {
+  min-width: var(--ds-mobile-tap);
+  min-height: var(--ds-mobile-tap);
+}
+
+/* 长按菜单/拖拽条在触屏上禁用干扰，避免误触 */
+@media (pointer: coarse) {
+  .pI_x6G_handle {
+    width: 12px; /* 拖拽条加宽，手指能按住 */
+  }
+}
+
+/* ============ 插件管理页（设置里的 Plugins / 插件清单）移动端适配 ============ */
+/* 插件设置 tab 标签：点击区太小（原本 7px×1px），横屏触屏难点 */
+.pbvGtq_tabs {
+  gap: 14px;
+  overflow-x: auto;                 /* 标签多时可横滑，避免溢出 */
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.pbvGtq_tabs::-webkit-scrollbar { display: none; }
+.pbvGtq_tab {
+  min-height: 44px;                 /* 触屏点击目标 */
+  padding: 10px 6px 12px;
+  font-size: 15px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 插件清单搜索框：36px 太矮，触屏难点 + 聚焦缩放 */
+.qSYn7G_search input {
+  height: 44px;
+  font-size: 16px;
+}
+
+/* 插件卡片点击区：加大，方便手指点开/收起 */
+.qSYn7G_cardContent {
+  min-height: 60px;
+  padding: 14px 16px;
+  touch-action: manipulation;
+}
+
+/* 卡片标题/详情在窄屏换行不挤压 */
+.qSYn7G_cardTitle {
+  font-size: 15px;
+}
+.qSYn7G_details {
+  grid-template-columns: 86px minmax(0,1fr);  /* 标签列略加宽，防中文换行挤一起 */
+}
+.qSYn7G_entryValue,
+.qSYn7G_details dd {
+  font-size: 12.5px;
+}
+
+/* 失败重试按钮：点击区太小（原本 4px×10px） */
+.qSYn7G_failure button {
+  min-height: 40px;
+  padding: 8px 18px;
+  font-size: 14px;
+}
+
+/* 横屏矮屏（高度 < 500px）：插件卡片改单列，减少横向拥挤，纵向滚动查看 */
+@media (max-height: 500px) and (orientation: landscape) {
+  .qSYn7G_cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .pbvGtq_section,
+  .qSYn7G_section {
+    max-width: 100%;
+  }
+}
+

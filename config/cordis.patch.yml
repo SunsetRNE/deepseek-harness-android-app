@@ -1,0 +1,33 @@
+# Android 兼容性 patch
+# 已修复：subprocess-local（node-pty → child_process）、attachment-local（sharp → 纯JS头解析）
+# 禁用依赖无法编译原生模块的插件（Pi-AI 模型适配器、sandbox、bash-sandbox）
+# 用 bash-local（仅依赖 subprocess，已加 sandboxMode 兼容）替代 bash-sandbox 提供 ctx.shell
+- id: llm-pi-ai
+  disabled: true
+- id: sandbox
+  disabled: true
+- id: bash-sandbox
+  disabled: true
+- id: permission
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+    defaultPreset: danger-full-access
+- insert:
+    - id: bash-local
+      name: '@deepseek-ai/dsh-bash-local'
+      config:
+        cwd: !!js process.cwd()
+        timeoutMs: 60000
+    - id: tool-shizuku
+      name: '@deepseek-ai/dsh-tool-shizuku'
+    - id: tool-android
+      name: '@deepseek-ai/dsh-tool-android'
