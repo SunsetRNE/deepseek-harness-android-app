@@ -54,3 +54,10 @@ docs/开发指南.md            项目开发指南（架构/常用命令/注意�
 |---|---|
 | `dsh-tool-shizuku` | 特权 shell 命令（异步 spawn + env 消毒 + dex 只读自愈） |
 | `dsh-tool-android` | 结构化系统操作：包管理/应用管理/系统设置/截图/模拟输入 |
+
+## 许可证
+
+本项目源码采用 [MIT](LICENSE) 许可证。
+
+- 依赖的 DSH 内核（@deepseek-ai/dsh）为 MIT；Shizuku SDK 为 Apache-2.0；node 运行时为 MIT。
+- 仓库不含签名密钥与凭证；安装包与运行时见 [Releases](https://github.com/woaiys3/deepseek-harness-android/releases)。
