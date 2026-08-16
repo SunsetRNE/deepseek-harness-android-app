@@ -8,7 +8,7 @@
 - 包名：`com.deepseek.harness`
 
 > ⚠️ 这是源码与配置仓库，**不含 APK 二进制、签名密钥（release.jks）、node 运行时、payload.zip、凭证文件**。
-> 📦 安装包（DeepSeekHarness.apk）与 node 运行时/DSH 内核分块包见 [Releases](https://github.com/woaiys3/deepseek-harness-android/releases)；构建源码前需自行准备 DSH 内核与 node 运行时。
+> 📦 安装包（DeepSeekHarness.apk）与 node 运行时/DSH 内核分块包见 [Releases](https://github.com/woaiys3/deepseek-harness-android-app/releases)；构建源码前需自行准备 DSH 内核与 node 运行时。
 
 ## 目录结构
 
@@ -60,4 +60,4 @@ docs/开发指南.md            项目开发指南（架构/常用命令/注意�
 本项目源码采用 [MIT](LICENSE) 许可证。
 
 - 依赖的 DSH 内核（@deepseek-ai/dsh）为 MIT；Shizuku SDK 为 Apache-2.0；node 运行时为 MIT。
-- 仓库不含签名密钥与凭证；安装包与运行时见 [Releases](https://github.com/woaiys3/deepseek-harness-android/releases)。
+- 仓库不含签名密钥与凭证；安装包与运行时见 [Releases](https://github.com/woaiys3/deepseek-harness-android-app/releases)。
