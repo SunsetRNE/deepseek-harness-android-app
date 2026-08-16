@@ -22,7 +22,7 @@ dsh-patches/
 
 ```
 APK (com.deepseek.harness)
-├── Android 壳（MainActivity：控制台 + WebView + 解压 payload + 拉起 node）
+├── Android 壳（MainActivity：权限引导页 + WebView + 解压 payload + 拉起 node）
 ├── payload（首次解压到 files/）
 │   ├── runtime/               node 二进制 + .so
 │   ├── dshroot/               DSH 内核（含本补丁）

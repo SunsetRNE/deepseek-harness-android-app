@@ -86,7 +86,7 @@ public class MainActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
     // 运行时确定的 dshroot 目录（外部公共目录优先，失败回退内部 files/payload/dshroot）
     private File dshrootDir = null;
-    // 引擎 node 进程（控制台"重启引擎"用）
+    // 引擎 node 进程
     private Process nodeProcess = null;
 
     // 权限界面
@@ -235,7 +235,7 @@ public class MainActivity extends Activity {
         setContentView(root);
     }
 
-    // ============ 控制台（替换首次权限页，跟随系统深/浅色）============
+    // ============ 界面主题色（跟随系统深/浅色，权限页与加载页共用）============
     private boolean isDark() {
         int m = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
         return m == Configuration.UI_MODE_NIGHT_YES;

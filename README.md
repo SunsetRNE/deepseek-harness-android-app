@@ -8,17 +8,19 @@
 - 包名：`com.deepseek.harness`
 
 > ⚠️ 这是源码与配置仓库，**不含 APK 二进制、签名密钥（release.jks）、node 运行时、payload.zip、凭证文件**。
-> 📦 安装包（DeepSeekHarness.apk）与 node 运行时/DSH 内核分块包见 [Releases](https://github.com/woaiys3/deepseek-harness-android-app/releases)；构建源码前需自行准备 DSH 内核与 node 运行时。
+> 📦 安装包（DeepSeekHarness.apk）、node 运行时与 DSH 内核分块包见 [Releases](https://github.com/woaiys3/deepseek-harness-android-app/releases)；构建源码前需准备 runtime/ 与 dshroot/（分块包合并方法见 Release 说明）。
 
 ## 目录结构
 
 ```
 android-app/             APK 构建工程
 ├── build.sh             一键打包脚本
+├── env.sh               编译工具链环境（可 export PREFIX 覆盖）
 ├── AndroidManifest.xml  包名/targetSdk(28)/锁横屏/Shizuku 声明
 ├── libs/                Shizuku 官方 aar（api/provider/aidl 13.1.5）
 ├── res/                 图标 + 字符串资源
-└── src/.../MainActivity.java   Android 原生壳（权限页/加载页/引擎启动）
+├── sdk/                 放 platform android.jar（见 sdk/README.md）
+└── src/.../MainActivity.java   Android 原生壳（权限引导页/加载页/引擎启动）
 
 mobile-patch/            移动端适配（注入 DSH 前端，不覆盖原生代码）
 ├── inject.sh            注入脚本（mobile.css + mobile.js 到 dist）
@@ -30,7 +32,7 @@ plugins/                 手机端自定义 DSH 工具插件
 └── dsh-tool-android/    结构化系统操作（包管理/应用/设置/截图/输入）
 
 dsh-patches/             DSH 源码补丁归档 + overlay
-├── README.md            架构/升级/插件/踩坑文档
+├── README.md            补丁说明（适配原因/升级 DSH/打包）
 ├── apply.sh             重新应用源码补丁
 └── overlay/             改好后的源码文件
 
