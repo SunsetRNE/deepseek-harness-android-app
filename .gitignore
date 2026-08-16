@@ -1,0 +1,8 @@
+# 二进制与密钥（不进入仓库）
+*.apk
+*.tar.aa
+*.tar.ab
+android-app/release.jks
+android-app/sdk/android.jar
+.credentials.yaml
+payload.zip
