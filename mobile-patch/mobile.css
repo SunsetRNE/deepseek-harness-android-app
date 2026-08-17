@@ -215,3 +215,201 @@ input[type="search"] {
     height: 44px;
   }
 }
+
+/* ============ 窄屏：AI 消息操作条分多行 ============
+   MessageIconActions（复制/赞踩/分支/时间/耗时/token）原为一行
+   flex（height:28px、文字 nowrap），窄屏下会伸出屏幕；
+   改为允许换行：时间/耗时为整体单元，放不下就折到下一行。
+   !important 是为了压过插件运行时注入的同名规则（注入顺序在后）。 */
+@media (max-width: 640px) {
+  .p-xYUq_actions {
+    flex-wrap: wrap !important;
+    height: auto !important;
+    min-height: 28px;
+    row-gap: 2px;
+  }
+  .p-xYUq_timeStart,
+  .p-xYUq_timeEnd {
+    white-space: normal !important;
+  }
+}
+
+/* ============ 窄屏：会话标题栏给左上角三条杠让位 ============
+   聊天区顶部 header（会话标题/面包屑）默认左 padding 20px，
+   会被 fixed 在左上角（8px 起、宽 36px）的三条杠按钮盖住；
+   窄屏下把标题栏左内边距加大，让标题从三条杠右侧开始。 */
+@media (max-width: 640px) {
+  .wSkVaW_header {
+    padding-left: 52px !important;
+  }
+}
+
+/* ============ 窄屏：正文与输入框扩宽 ============
+   桌面端为三列布局预留了大量左右内缩（消息区 padding 32px、
+   输入框 clearance 16+inset 8 = 24px），窄屏（竖屏/手机横屏）下
+   白白浪费宽度。这里把内缩收小，让正文与输入栏更宽；
+   同时滚动条不预留占位（避免输入栏被压窄导致按钮重叠）。 */
+@media (max-width: 640px) {
+  /* 正文消息区：左右内缩 32px → 8px */
+  .Md3f7G_scroll {
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+  }
+  /* 输入框 dock 更宽：clearance/inset 收小 */
+  .wSkVaW_root {
+    --dsh-composer-side-clearance: 4px !important;
+    --dsh-composer-dock-inset: 4px !important;
+  }
+  /* 滚动条不占宽度，避免压缩输入栏（有会话时按钮重叠的根因） */
+  .wSkVaW_scrollBody,
+  .Md3f7G_scroll {
+    scrollbar-gutter: auto !important;
+  }
+  /* 工具调用卡片：不贴屏幕左右边缘 */
+  ._block_10eou_7,
+  ._output_10eou_162,
+  ._content_biesw_99 {
+    margin-left: 2px !important;
+    margin-right: 2px !important;
+  }
+}
+
+/* ============ 窄屏：输入栏右侧按钮保持一行且不重叠 ============
+   InputBar 的 trailing 一行排开（审核模式按钮 + 模型名 + token 计量），
+   窄屏下直接换行会让审核按钮掉到下一行、输入框变高；
+   这里保持一行（nowrap），通过压缩模型名宽度与按钮间距避免重叠。 */
+@media (max-width: 640px) {
+  .uV2eYG_trailing,
+  .uV2eYG_modes,
+  .uV2eYG_tools {
+    flex-wrap: nowrap !important;
+  }
+  .uV2eYG_trailing,
+  .uV2eYG_modes {
+    gap: 6px !important;
+  }
+  .uV2eYG_select {
+    max-width: 26vw !important;
+    font-size: 12px !important;
+  }
+}
+
+/* ============ 窄屏：Bash 工具卡片防横向溢出 ============
+   终端卡片里的命令文本/输出行 white-space:pre 不换行，
+   窄屏下会把卡片撑出屏幕；改为可换行（pre-wrap）。 */
+@media (max-width: 640px) {
+  ._command_10eou_122,
+  ._line_10eou_186 {
+    white-space: pre-wrap !important;
+    word-break: break-all;
+  }
+  ._block_10eou_7 {
+    max-width: 100% !important;
+    box-sizing: border-box;
+  }
+}
+
+/* ============ 插件按钮（mobile.js 注入，三条杠下方） ============
+   窄屏下侧边栏里的插件入口不易触达，改为左上角三条杠下方的
+   图标按钮（fixed 定位由 JS 设置）；点击打开插件管理面板。 */
+.dsh-mobile-plugin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, #8b98a9);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.dsh-mobile-plugin-btn:active {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08));
+  color: var(--dsw-alias-label-primary, #e6edf3);
+}
+.dsh-mobile-plugin-btn svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+/* ============ 窄屏：插件按钮定位到三条杠下方 ============
+   核心渲染的插件按钮（header.utilities 里的 [data-cordis-badge]，
+   单一实例）默认在右上角；CSS position:fixed 挪到左上角三条杠
+   正下方。不动 DOM（按钮留在 #root 内，React 事件委托才有效），
+   只改样式；隐藏宽版按钮文字，只留图标。 */
+@media (max-width: 1024px) {
+  .wSkVaW_headerUtilities [data-cordis-badge] {
+    position: fixed !important;
+    top: 52px !important;
+    left: 8px !important;
+    width: 32px !important;
+    height: 32px !important;
+    margin: 0 !important;
+    padding: 0 6px !important;
+    gap: 4px !important;
+    border-radius: 8px !important;
+    font-size: 12px !important;
+    z-index: 1000 !important;
+    background: transparent !important;
+  }
+  .wSkVaW_headerUtilities [data-cordis-badge] > span {
+    display: none !important;
+  }
+}
+
+/* ============ 窄屏：后台任务菜单不超出屏幕 ============
+   后台任务下拉（.QsffPG_menu）定位 left:0，按钮在右侧时面板
+   向右延伸超出屏幕（任务名被推到屏外）；改为右对齐向左展开。 */
+@media (max-width: 640px) {
+  .QsffPG_menu {
+    left: auto !important;
+    right: 0 !important;
+    max-width: calc(100vw - 24px) !important;
+  }
+}
+
+/* ============ 窄屏：设置页单栏适配 ============
+   设置页（.VOzbGW_panel）默认 800px 左右两栏（nav 188px + 内容），
+   竖屏下内容列被挤到一百多像素、几乎不可用；
+   改为上下排列：导航横排（可横向滚动）在顶部，内容区全宽在下。 */
+@media (max-width: 640px) {
+  .VOzbGW_panel {
+    flex-direction: column !important;
+    width: 100% !important;
+    max-width: calc(100vw - 16px) !important;
+    height: min(800px, calc(100vh - 32px)) !important;
+    border-radius: 16px !important;
+  }
+  .VOzbGW_nav {
+    width: 100% !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 8px !important;
+    padding: 10px 8px 0 !important;
+    overflow-x: auto !important;
+  }
+  .VOzbGW_navTitle {
+    flex: none !important;
+    white-space: nowrap !important;
+  }
+  .VOzbGW_navList {
+    flex-direction: row !important;
+    gap: 4px !important;
+  }
+  .VOzbGW_navCell {
+    flex: none !important;
+    white-space: nowrap !important;
+    height: 36px !important;
+    padding: 6px 12px !important;
+  }
+  .VOzbGW_content {
+    flex: 1 !important;
+    overflow-y: auto !important;
+    min-height: 0 !important;
+  }
+}

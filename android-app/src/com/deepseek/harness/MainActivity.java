@@ -1093,6 +1093,9 @@ public class MainActivity extends Activity {
         if (!binjs.exists()) throw new IOException("dsh bin.js missing");
         if (!node.canExecute()) node.setExecutable(true, false);
 
+        // 注意：Android 兼容补丁（禁用 llm-pi-ai/sandbox/bash-sandbox 的 cordis.patch.yml）
+        // 位于 $DSH_HOME/cordis.patch.yml，由 dsh profile-boot 的 homePatches 自动加载，
+        // 无需 --patch 参数（重复传入会导致 duplicate loader entry 崩溃）。
         ProcessBuilder pb = new ProcessBuilder(
                 node.getAbsolutePath(), "--expose-internals", binjs.getAbsolutePath(),
                 "web", "--host", "127.0.0.1", "--port", "3080");

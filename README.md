@@ -31,13 +31,6 @@
 - 系统操作能力需配合 [Shizuku](https://shizuku.rikka.app/)（免 Root 授权）
 - API Key 在 App 内页面填写，只存本机，绝不打包进 APK
 
-## 📸 界面截图
-
-|  |  |  |
-|---|---|---|
-| ![截图1](docs/screenshots/screenshot-1.jpg) | ![截图2](docs/screenshots/screenshot-2.jpg) | ![截图3](docs/screenshots/screenshot-3.jpg) |
-| ![截图4](docs/screenshots/screenshot-4.jpg) | ![截图5](docs/screenshots/screenshot-5.jpg) | ![截图6](docs/screenshots/screenshot-6.jpg) |
-
 ## 📁 目录结构
 
 ```
