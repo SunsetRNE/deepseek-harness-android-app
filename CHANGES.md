@@ -1,5 +1,32 @@
 # DeepSeek Harness Android · 移动端优化改动清单
 
+## v1.3.2（修复：升级用户 UI 不更新 · 2026-08-18）
+
+> **背景**：v1.3.0/v1.3.1 的侧栏改造与竖屏适配改的是**核心源码**
+> （dsh-client-ui-layout / dsh-client-ui-cordis 的 client.js）。外部运行目录
+> `/sdcard/DeepSeekHarness/dshroot` 采用"已有文件不覆盖"策略，而这两个
+> client.js **不在强制覆盖白名单** → 从旧版升级的用户，外部目录保留旧文件，
+> 页面仍是旧 UI（无三条杠侧栏、竖屏不适配）；只有干净安装/清数据重装的用户
+> 才是新版 UI。真机反馈"下载 v1.3.x 页面还是旧版本"即此根因。
+
+### 修复
+- **MainActivity.java `FORCE_OVERWRITE_PREFIXES` 增加 2 项**（升级时强制覆盖）：
+  - `dsh-client-ui-layout/lib/client.js`（侧栏改造：三条杠/浮层侧栏/gridColumn）
+  - `dsh-client-ui-cordis/lib/client.js`（插件按钮 header 单实例）
+- 版本号：versionCode 3 → **4**，versionName 1.3.1 → **1.3.2**
+- buildenv 重建（清数据被删）：从 /sdcard/github 归档恢复 + 工具 wrapper 重写 + devhome 软链 + v1.3.x UI 文件同步
+
+### 用户侧修复（已装旧版的用户）
+- 方式一：直接升级 v1.3.2 → 启动时自动强制覆盖这两个文件（REVISION 变化触发补齐）
+- 方式二：删除 `/sdcard/DeepSeekHarness/dshroot` 重开 App（全量重新解压）
+
+### 验证
+- [ ] dex 含 MainActivity ✅（构建校验）
+- [ ] 引擎自测 HTTP 200
+- [ ] 白名单含 layout/cordis client.js
+
+---
+
 ## v1.3.1（移动端 UI 打磨 + 插件按钮核心化 · 2026-08-17 深夜 ~ 08-18）
 
 ### 移动端布局打磨（mobile.css + mobile.js，运行目录同步生效）
