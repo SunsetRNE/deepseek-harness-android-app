@@ -13,7 +13,7 @@
 - 🧠 **完整 DSH 内核**：`@deepseek-ai/dsh` 0.1.0-rc.6，保留插件生态 + RPC API，前端用 DSH 原生界面
 - 📱 **移动端适配**：触摸优化 + 软键盘适配 + 首次启动权限引导页（9 项权限一站式配置）
 - 💾 **卸载不丢数据**：dshroot 外置到 `/sdcard/DeepSeekHarness`，重装/升级不清空 AI 的运行时改动
-- 🐋 鲸鱼品牌图标，锁横屏优化触控
+- 🐋 鲸鱼品牌图标，横竖屏自由旋转
 
 ## 🛠️ 手机端插件（本项目的核心特色）
 
@@ -34,10 +34,12 @@
 ## 📁 目录结构
 
 ```
+CHANGES.md              版本改动记录（含 @Suyi222 贡献的 v1.1.1 稳定基线）
+
 android-app/             APK 构建工程
 ├── build.sh             一键打包脚本
 ├── env.sh               编译工具链环境（可 export PREFIX 覆盖）
-├── AndroidManifest.xml  包名/targetSdk(28)/锁横屏/Shizuku 声明
+├── AndroidManifest.xml  包名/targetSdk(28)/横竖屏自由旋转/Shizuku 声明
 ├── libs/                Shizuku 官方 aar（api/provider/aidl 13.1.5）
 ├── res/                 图标 + 字符串资源
 ├── sdk/                 放 platform android.jar（见 sdk/README.md）
@@ -45,8 +47,8 @@ android-app/             APK 构建工程
 
 mobile-patch/            移动端适配（注入 DSH 前端，不覆盖原生代码）
 ├── inject.sh            注入脚本（mobile.css + mobile.js 到 dist）
-├── mobile.css           触摸优化 + 插件管理页 UI 适配
-└── mobile.js            软键盘适配（VisualViewport 方案）
+├── mobile.css           触摸优化 + 竖屏适配 + 插件管理页 UI 适配
+└── mobile.js            软键盘适配（VisualViewport 方案，横竖屏通用）
 
 plugins/                 手机端自定义 DSH 工具插件
 ├── dsh-tool-shizuku/    特权 shell（Shizuku 通道）
