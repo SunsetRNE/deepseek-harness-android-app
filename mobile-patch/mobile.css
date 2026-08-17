@@ -1,13 +1,22 @@
 /* ============================================================
-   deepdive 手机版 UI 优化 v0.2
+   deepdive 手机版 UI 优化 v0.3（对应 APK v1.3.1）
    ------------------------------------------------------------
-   本版重写说明：
+   v0.2 重写说明（历史）：
    - 旧版 mobile.css 使用的类名（gdEzaW_/hHd-Xa_/pbvGtq_/qSYn7G_ 等）
      在真实前端构建中不存在，属"死代码"；本版全部替换为
      0.1.0-rc.6 真实构建中的类名（_rail_1hk8w、_wrap_1ao1y、
      _answer_d4nqi、_markdown_1nba0、_block_10eou 等）。
    - 新增：竖屏适配（原 APK 锁横屏）、鲸鱼蓝皮肤、触摸优化。
-   - 不删除任何功能，只做视觉与触控优化。
+   v0.3 新增（v1.3.1，全部为布局/溢出修复，不删功能）：
+   - 消息操作条多行换行（.p-xYUq_actions flex-wrap）
+   - 标题栏让位三条杠（.wSkVaW_header padding-left:52px）
+   - 正文/输入框扩宽（消息区 padding 32→8px、composer 边距 16/8→4px）
+   - 滚动条不占位（scrollbar-gutter:auto）→ 修输入栏按钮重叠
+   - Bash 工具卡片防横向溢出（pre-wrap + word-break）
+   - 后台任务菜单右对齐（.QsffPG_menu right:0）
+   - 设置页单栏（.VOzbGW_panel 上下排列 + 内容可滚动）
+   - 插件按钮定位到三条杠下方（[data-cordis-badge] fixed 52/8，不动 DOM）
+   注意：类名是运行时插件动态注入的 CSS module 类名，改前先确认真实类名。
    ============================================================ */
 
 :root {

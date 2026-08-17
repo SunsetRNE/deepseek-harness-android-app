@@ -1,10 +1,11 @@
 /**
- * 移动端软键盘适配 v0.2（deepdive 稳定版）
- * 原版方案（VisualViewport + translateY）保留，新增：
- *  - 竖屏同样生效（原 APK 锁横屏，解锁后本脚本在竖屏下也负责输入栏可见）
- *  - rAF 节流 + 异常保护，避免极端情况抖动
- *  - 暴露 --kb-height 供 CSS 使用
- * 注意：这是稳定基线版本，不含实验性 UI 变换（侧边栏/设置页改造另见后续版本）。
+ * 移动端软键盘适配 v0.3（对应 APK v1.3.1）
+ * v0.2（历史）：VisualViewport + translateY 方案，竖屏横屏通用，
+ *   rAF 节流 + 异常保护，暴露 --kb-height 供 CSS 使用。
+ * v0.3 新增（v1.3.1）：键盘防自动聚焦 —— 用 pointerdown 位置判断焦点来源，
+ *   切换话题/新会话自动聚焦输入框时立即 blur（不弹键盘），
+ *   只有用户真的点击输入框才弹键盘。
+ * 注：窄屏侧栏改造（三条杠 + 浮层）在核心源码 dsh-client-ui-layout，不在此文件。
  */
 (function () {
   if (!window.visualViewport) return;

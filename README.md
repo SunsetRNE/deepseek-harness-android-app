@@ -15,6 +15,15 @@
 - 💾 **卸载不丢数据**：dshroot 外置到 `/sdcard/DeepSeekHarness`，重装/升级不清空 AI 的运行时改动
 - 🐋 鲸鱼品牌图标，横竖屏自由旋转
 
+## 📸 界面预览
+
+> 截图于 v1.2.0（2026-08-17），完整文件见 `docs/screenshots/`。
+
+| | | |
+|---|---|---|
+| ![界面截图 1](docs/screenshots/screenshot-1.jpg) | ![界面截图 2](docs/screenshots/screenshot-2.jpg) | ![界面截图 3](docs/screenshots/screenshot-3.jpg) |
+| ![界面截图 4](docs/screenshots/screenshot-4.jpg) | ![界面截图 5](docs/screenshots/screenshot-5.jpg) | ![界面截图 6](docs/screenshots/screenshot-6.jpg) |
+
 ## 🛠️ 手机端插件（本项目的核心特色）
 
 | 插件 | 能力 |
