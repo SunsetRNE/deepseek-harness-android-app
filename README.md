@@ -1,16 +1,37 @@
 # DeepSeek Harness 手机版（Android）
 
-把 DeepSeek Harness（DSH）内核 + 官方前端打包成可安装到 Android 手机的 App，并针对手机做移动端适配与系统能力插件。
+> 把 DeepSeek Harness（DSH）打包成**可直接安装的 Android APK** —— 装上就能用，还能让 AI **免 Root 真正操作手机**。
 
-- 内核：`@deepseek-ai/dsh` 0.1.0-rc.6（保留插件生态 + RPC API）
-- 前端：DSH 原生界面（`dsh-web-frontend` dist），只做移动端适配
-- 品牌：DeepSeek Harness，鲸鱼图标
-- 包名：`com.deepseek.harness`
+![License](https://img.shields.io/github/license/woaiys3/deepseek-harness-android-app)
+![Stars](https://img.shields.io/github/stars/woaiys3/deepseek-harness-android-app)
+![Release](https://img.shields.io/github/v/release/woaiys3/deepseek-harness-android-app)
 
-> ⚠️ 这是源码与配置仓库，**不含 APK 二进制、签名密钥（release.jks）、node 运行时、payload.zip、凭证文件**。
-> 📦 安装包（DeepSeekHarness.apk）、node 运行时与 DSH 内核分块包见 [Releases](https://github.com/woaiys3/deepseek-harness-android-app/releases)；构建源码前需准备 runtime/ 与 dshroot/（分块包合并方法见 Release 说明）。
+## ✨ 核心亮点
 
-## 目录结构
+- 📦 **APK 一键安装**：不用 Termux、不用敲命令，下载安装即用（包名 `com.deepseek.harness`）
+- 🔓 **免 Root 系统特权**：通过 Shizuku 打通系统 shell —— AI 能**装应用、点屏幕、改系统设置、截图、模拟输入**，这是"手机上的 AI Agent"，不只是聊天窗口
+- 🧠 **完整 DSH 内核**：`@deepseek-ai/dsh` 0.1.0-rc.6，保留插件生态 + RPC API，前端用 DSH 原生界面
+- 📱 **移动端适配**：触摸优化 + 软键盘适配 + 首次启动权限引导页（9 项权限一站式配置）
+- 💾 **卸载不丢数据**：dshroot 外置到 `/sdcard/DeepSeekHarness`，重装/升级不清空 AI 的运行时改动
+- 🐋 鲸鱼品牌图标，锁横屏优化触控
+
+## 🛠️ 手机端插件（本项目的核心特色）
+
+| 插件 | 能力 |
+|---|---|
+| `dsh-tool-shizuku` | 特权 shell：任意系统命令（pm/am/settings/dumpsys…），异步执行 + 环境消毒 + dex 只读自愈 |
+| `dsh-tool-android` | 结构化系统操作：包管理 / 应用管理 / 系统设置 / 截图 / 模拟输入 |
+
+> 通过这两个插件，AI 不再只是"聊聊天"，而是能**真正控制你的手机**。
+
+## 📦 安装
+
+下载 [Releases](https://github.com/woaiys3/deepseek-harness-android-app/releases) 里的 `DeepSeekHarness.apk` 安装即可。
+- Android 7.0（API 24）及以上
+- 系统操作能力需配合 [Shizuku](https://shizuku.rikka.app/)（免 Root 授权）
+- API Key 在 App 内页面填写，只存本机，绝不打包进 APK
+
+## 📁 目录结构
 
 ```
 android-app/             APK 构建工程
@@ -41,7 +62,7 @@ config/cordis.patch.yml  DSH 组合配置（禁原生模块 + 插入 bash-local/
 docs/开发指南.md            项目开发指南（架构/常用命令/注意事项）
 ```
 
-## 构建说明
+## 🔨 构建说明
 
 详见 `docs/开发指南.md` 第六节「常用命令」与第七节「注意事项」。
 
@@ -50,14 +71,10 @@ docs/开发指南.md            项目开发指南（架构/常用命令/注意�
 - 需准备 `runtime/`（node v26 + 依赖库）和 `dshroot/`（DSH 内核）才能打完整 APK
 - `build.sh` 会自动注入 mobile.css/mobile.js，并做 API Key 安全检查
 
-## 手机端插件
+> ⚠️ 这是源码与配置仓库，**不含 APK 二进制、签名密钥（release.jks）、node 运行时、payload.zip、凭证文件**。
+> 📦 安装包（DeepSeekHarness.apk）、node 运行时与 DSH 内核分块包见 [Releases](https://github.com/woaiys3/deepseek-harness-android-app/releases)；构建源码前需准备 runtime/ 与 dshroot/（分块包合并方法见 Release 说明）。
 
-| 插件 | 功能 |
-|---|---|
-| `dsh-tool-shizuku` | 特权 shell 命令（异步 spawn + env 消毒 + dex 只读自愈） |
-| `dsh-tool-android` | 结构化系统操作：包管理/应用管理/系统设置/截图/模拟输入 |
-
-## 许可证
+## 📄 许可证
 
 本项目源码采用 [MIT](LICENSE) 许可证。
 
