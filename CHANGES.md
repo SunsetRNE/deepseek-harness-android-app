@@ -21,9 +21,10 @@
 - 方式二：删除 `/sdcard/DeepSeekHarness/dshroot` 重开 App（全量重新解压）
 
 ### 验证
-- [ ] dex 含 MainActivity ✅（构建校验）
-- [ ] 引擎自测 HTTP 200
-- [ ] 白名单含 layout/cordis client.js
+- [x] dex 含 MainActivity ✅（94140 bytes，构建校验通过）
+- [x] 引擎自测 HTTP 200 ✅（v1.3.2 payload 完整实测）
+- [x] 白名单含 layout/cordis client.js ✅（dex 字符串验证）
+- [x] payload 含 v1.3.x 新版 UI（gridColumn / toggleSidebar / header.utilities）✅
 
 ---
 
