@@ -782,6 +782,13 @@ public class MainActivity extends Activity {
                         new Thread(new Runnable() {
                             @Override public void run() { cleanupTrashDirs(extCleanup); }
                         }, "trash-cleanup").start();
+                        // 相册保护：dshroot 里 2 万+ 文件（node_modules 的 .js/.ts/.d.ts）会被
+                        // MediaStore 内容嗅探误判为视频，出现在相册（"零分零秒"）。.nomedia 让
+                        // MediaStore 忽略整个外部目录。幂等，存在则跳过。
+                        File nomedia = new File(externalRoot, ".nomedia");
+                        if (!nomedia.exists()) {
+                            try { nomedia.createNewFile(); } catch (Throwable ignored) {}
+                        }
                     }
 
                     if (!done.exists()) {

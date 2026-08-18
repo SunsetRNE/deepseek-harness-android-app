@@ -1,5 +1,31 @@
 # DeepSeek Harness Android · 移动端优化改动清单
 
+## v1.3.3（修复：相册出现大量"零分零秒视频" · 2026-08-18）
+
+> **背景**：外部运行目录 `/sdcard/DeepSeekHarness/dshroot` 含 2 万+ 文件
+> （node_modules 的 .js/.ts/.d.ts 等），Android MediaStore 对未知类型文件做
+> **内容嗅探**，把大量文本文件**误判为视频** → 相册出现"零分零秒"的假视频，
+> 所有使用外部 dshroot 的用户都会遇到。
+
+### 修复
+- **MainActivity 启动时自动创建 `/sdcard/DeepSeekHarness/.nomedia`**：
+  MediaStore 忽略整个外部目录（含 dshroot），相册不再出现误判文件。
+  幂等（已存在则跳过），外部目录可写时生效。
+- 版本号：versionCode 4 → **5**，versionName 1.3.2 → **1.3.3**
+
+### 用户侧修复（已装旧版的用户）
+- 手动创建：文件管理器在 `/sdcard/DeepSeekHarness/` 下新建空文件 `.nomedia`；
+  或直接升级 v1.3.3（自动创建）
+- 相册里已出现的假视频可直接删除（都是 0 字节/损坏文本文件，无内容）；
+  删除后若相册仍显示，重启相册或清除相册缓存
+
+### 验证
+- [ ] 构建通过（versionCode 5，dex 含 MainActivity）
+- [ ] 引擎自测 HTTP 200
+- [ ] .nomedia 创建逻辑进 dex（字符串验证）
+
+---
+
 ## v1.3.2（修复：升级用户 UI 不更新 · 2026-08-18）
 
 > **背景**：v1.3.0/v1.3.1 的侧栏改造与竖屏适配改的是**核心源码**
