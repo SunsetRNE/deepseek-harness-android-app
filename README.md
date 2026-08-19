@@ -10,6 +10,10 @@
 
 - 📦 **APK 一键安装**：不用 Termux、不用敲命令，下载安装即用（包名 `com.deepseek.harness`）
 - 🔓 **免 Root 系统特权**：通过 Shizuku 打通系统 shell —— AI 能**装应用、点屏幕、改系统设置、截图、模拟输入**，这是"手机上的 AI Agent"，不只是聊天窗口
+- 🟢 **可选特权，不授予也能正常用**（v1.4.0）：不装 Shizuku/无 root 也能用——文件读写、预览、编辑只需「所有文件访问」权限；未授权时 AI 不会反复尝试系统操作，需要时会**引导你授权**
+- 🔀 **Root 优先，Shizuku 备用**（v1.4.0）：有 root 走 su 通道，无 root 走 Shizuku，自动选择
+- ⏰ **前台保活**（v1.4.0）：AI 干活时挂后台/锁屏不被杀，任务完成推送通知
+- 🔔 **AI 发通知**（v1.4.0）：只需通知权限，任务完成/需要关注时推送到通知栏
 - 🧠 **完整 DSH 内核**：`@deepseek-ai/dsh` 0.1.0-rc.6，保留插件生态 + RPC API，前端用 DSH 原生界面
 - 📱 **移动端适配**：触摸优化 + 软键盘适配 + 首次启动权限引导页（9 项权限一站式配置）
 - 💾 **卸载不丢数据**：dshroot 外置到 `/sdcard/DeepSeekHarness`，重装/升级不清空 AI 的运行时改动
@@ -17,12 +21,18 @@
 
 ## 📸 界面预览
 
-> 截图于 v1.2.0（2026-08-17），完整文件见 `docs/screenshots/`。
+> 截图于 v1.2.0（2026-08-17）与 v1.4.0（2026-08-20），完整文件见 `docs/screenshots/`。
 
 | | | |
 |---|---|---|
 | ![界面截图 1](docs/screenshots/screenshot-1.jpg) | ![界面截图 2](docs/screenshots/screenshot-2.jpg) | ![界面截图 3](docs/screenshots/screenshot-3.jpg) |
 | ![界面截图 4](docs/screenshots/screenshot-4.jpg) | ![界面截图 5](docs/screenshots/screenshot-5.jpg) | ![界面截图 6](docs/screenshots/screenshot-6.jpg) |
+
+**v1.4.0（Lite 共存版）实测截图**：
+
+| | | |
+|---|---|---|
+| ![Lite 截图 1](docs/screenshots/screenshot-lite-1.jpg) | ![Lite 截图 2](docs/screenshots/screenshot-lite-2.jpg) | ![Lite 截图 3](docs/screenshots/screenshot-lite-3.jpg) |
 
 ## 🛠️ 手机端插件（本项目的核心特色）
 
@@ -35,9 +45,14 @@
 
 ## 📦 安装
 
-下载 [Releases](https://github.com/woaiys3/deepseek-harness-android-app/releases) 里的 `DeepSeekHarness.apk` 安装即可。
+下载 [Releases](https://github.com/woaiys3/deepseek-harness-android-app/releases) 里的 APK 安装即可：
+
+- **`DeepSeekHarness.apk`（v1.4.0，推荐）**：正式版，从旧版本同签名升级
+- **`DeepSeekHarness-Lite.apk`（v1.4.0-lite）**：**共存版**，包名 `com.deepseek.harness.beta`，与正式版完全独立、可同时安装——适合**不敢直接升级、想先试用**的用户；数据独立在 `/sdcard/DeepSeekHarnessLite/`，API Key 需单独填，测完可随时卸载（不影响正式版）
+
+要求：
 - Android 7.0（API 24）及以上
-- 系统操作能力需配合 [Shizuku](https://shizuku.rikka.app/)（免 Root 授权）
+- 系统操作能力需配合 [Shizuku](https://shizuku.rikka.app/)（免 Root 授权）或有 root；**都不授予也能正常使用**（文件操作只需「所有文件访问」权限）
 - API Key 在 App 内页面填写，只存本机，绝不打包进 APK
 
 > 🆘 **打不开 / 白屏 / 连接失败？** 先看 [启动排查](docs/启动排查.md)（常见问题都能自助解决）。
