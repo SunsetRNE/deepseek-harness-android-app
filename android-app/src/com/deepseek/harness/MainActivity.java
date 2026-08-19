@@ -3,6 +3,9 @@ package com.deepseek.harness;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.AppOpsManager;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -37,6 +40,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -44,7 +48,11 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.net.HttpURLConnection;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -288,7 +296,10 @@ public class MainActivity extends Activity {
                 .setTitle("退出 deepdive")
                 .setMessage("确定要退出吗？服务器将停止运行。")
                 .setPositiveButton("退出", new DialogInterface.OnClickListener() {
-                    @Override public void onClick(DialogInterface d, int w) { finish(); }
+                    @Override public void onClick(DialogInterface d, int w) {
+                        stopKeepAliveService(); // 用户主动退出：停止保活服务
+                        finish();
+                    }
                 })
                 .setNegativeButton("取消", null)
                 .show();
@@ -523,9 +534,12 @@ public class MainActivity extends Activity {
                     }
                 });
 
-        addPermRow(col, "Shizuku 特权", "让 AI 以系统级权限执行操作（安装/卸载、改系统设置等）。",
+        addPermRow(col, "Shizuku / Root 特权（可选）", "不授权也能正常使用：文件读写、预览、编辑只需「所有文件访问」权限。授权后可让 AI 执行系统级操作（安装/卸载应用、改系统设置、模拟点击等）。",
                 new StatusProvider() {
-                    @Override public boolean granted() { return shizukuOk != null && shizukuOk; }
+                    @Override public boolean granted() {
+                        // 只读缓存：root 探测在后台线程执行（probeShizuku），不在主线程跑 su
+                        return (shizukuOk != null && shizukuOk) || (rootOk != null && rootOk);
+                    }
                 },
                 new View.OnClickListener() {
                     @Override public void onClick(View v) {
@@ -663,11 +677,14 @@ public class MainActivity extends Activity {
         }
         boolean binderOk = false;
         try { binderOk = Shizuku.pingBinder(); } catch (Throwable ignored) {}
+        boolean rootOkNow = rootOk != null && rootOk;
 
-        if (shizukuOk != null && shizukuOk) {
+        if (rootOkNow || (shizukuOk != null && shizukuOk)) {
             AlertDialog.Builder b = new AlertDialog.Builder(this);
-            b.setTitle("Shizuku 特权");
-            b.setMessage("Shizuku 已授权，本应用可以执行系统级操作。");
+            b.setTitle("系统特权（可选）");
+            b.setMessage((rootOkNow ? "已检测到 Root（su）可用，AI 可以执行系统级操作。\n" : "") +
+                    ((shizukuOk != null && shizukuOk) ? "Shizuku 已授权，AI 可以执行系统级操作。\n" : "") +
+                    "\n不授予特权也能正常使用：文件读写、预览、编辑只需「所有文件访问」权限。");
             b.setNegativeButton("关闭", null);
             b.show();
         } else if (binderOk) {
@@ -713,6 +730,8 @@ public class MainActivity extends Activity {
             @Override public void run() {
                 final boolean ok = shizukuAvailable();
                 shizukuOk = ok;
+                // 顺带在后台探测 root（避免在主线程执行 su）
+                try { rootAvailable(); } catch (Throwable ignored) {}
                 ui.post(new Runnable() { @Override public void run() { refreshAllStatuses(); } });
             }
         }, "shizuku-probe").start();
@@ -724,6 +743,38 @@ public class MainActivity extends Activity {
             return Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED;
         } catch (Throwable t) {
             return false;
+        }
+    }
+
+    /** 探测 root（su）是否可用：执行 `su -c id`，输出含 uid=0 即视为可用。结果缓存，onResume 时重置。 */
+    private volatile Boolean rootOk = null;
+    private boolean rootAvailable() {
+        Boolean cached = rootOk;
+        if (cached != null) return cached;
+        boolean ok = probeRoot();
+        rootOk = ok;
+        return ok;
+    }
+
+    private boolean probeRoot() {
+        Process p = null;
+        try {
+            p = Runtime.getRuntime().exec(new String[]{"su", "-c", "id"});
+            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line = r.readLine();
+            // 等待进程退出，避免僵尸；API 26+ 支持超时，低版本直接等待（su -c id 很快返回）
+            try {
+                if (Build.VERSION.SDK_INT >= 26) {
+                    if (!p.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) p.destroy();
+                } else {
+                    p.waitFor();
+                }
+            } catch (Throwable ignored) {}
+            return line != null && line.contains("uid=0");
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            try { if (p != null) p.destroy(); } catch (Throwable ignored) {}
         }
     }
 
@@ -757,6 +808,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (webView != null) webView.onResume();
+        rootOk = null; // 从设置页/Shizuku 返回时重新探测 root
         refreshAllStatuses();
         // 从 Shizuku/设置页返回时重新检测
         if (permRows != null && !permRows.isEmpty()) probeShizuku();
@@ -764,6 +816,8 @@ public class MainActivity extends Activity {
 
     // ============ 引擎启动（原逻辑）============
     private void startEngine() {
+        startKeepAliveService();   // 前台保活：挂后台不被杀（引擎持续运行）
+        startNotifyServer();       // AI 发通知通道：本地 127.0.0.1:3081，只需通知权限
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
@@ -832,6 +886,208 @@ public class MainActivity extends Activity {
                 }
             }
         }, "engine-boot").start();
+    }
+
+    // ============ 前台保活服务 ============
+    /** 启动前台服务（带常驻通知），引擎运行期间挂后台不被系统杀掉。 */
+    private void startKeepAliveService() {
+        try {
+            Intent i = new Intent(this, EngineService.class);
+            if (Build.VERSION.SDK_INT >= 26) {
+                startForegroundService(i);
+            } else {
+                startService(i);
+            }
+            Log.i(TAG, "keep-alive service started");
+        } catch (Throwable t) {
+            Log.w(TAG, "keep-alive service start failed", t);
+        }
+    }
+
+    /** 停止前台服务（用户主动退出时调用）。 */
+    private void stopKeepAliveService() {
+        try {
+            stopService(new Intent(this, EngineService.class));
+        } catch (Throwable ignored) {}
+    }
+
+    // ============ AI 发通知通道（本地端口，只需通知权限） ============
+    /** 通知渠道（App 内发通知用，与保活服务的渠道分开）。 */
+    private static final String NOTIFY_CHANNEL_ID = "dsh_ai_notify";
+    private static final String NOTIFY_CHANNEL_NAME = "AI 通知";
+    private static final int AI_NOTIFY_PORT = 3081; // 与 3080 引擎端口相邻，避免冲突
+
+    /** 启动本地通知监听：AI 通过插件请求 http://127.0.0.1:3081 发通知（仅需通知权限）。 */
+    private void startNotifyServer() {
+        new Thread(new Runnable() {
+            @Override public void run() {
+                ServerSocket ss = null;
+                try {
+                    ss = new ServerSocket();
+                    ss.setReuseAddress(true);
+                    ss.bind(new InetSocketAddress("127.0.0.1", AI_NOTIFY_PORT));
+                    Log.i(TAG, "notify server listening on " + AI_NOTIFY_PORT);
+                    while (!Thread.currentThread().isInterrupted()) {
+                        final Socket s = ss.accept();
+                        handleNotifyConnection(s);
+                    }
+                } catch (Throwable t) {
+                    Log.w(TAG, "notify server stopped", t);
+                } finally {
+                    try { if (ss != null) ss.close(); } catch (Throwable ignored) {}
+                }
+            }
+        }, "notify-server").start();
+    }
+
+    /** 处理一条通知请求：读 HTTP 请求头 + JSON 正文 {title, text}，调 NotificationManager 发通知。 */
+    private void handleNotifyConnection(final Socket s) {
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    s.setSoTimeout(5000);
+                    InputStream in = s.getInputStream();
+                    // 1) 读请求头直到空行，同时解析 Content-Length
+                    int contentLength = 0;
+                    StringBuilder head = new StringBuilder();
+                    int c;
+                    while ((c = in.read()) != -1) {
+                        head.append((char) c);
+                        if (head.length() >= 4 && head.substring(head.length() - 4).equals("\r\n\r\n")) break;
+                        if (head.length() > 8192) break; // 防异常大头部
+                    }
+                    String h = head.toString();
+                    int clIdx = h.toLowerCase().indexOf("content-length:");
+                    if (clIdx >= 0) {
+                        int eol = h.indexOf('\r', clIdx);
+                        if (eol < 0) eol = h.indexOf('\n', clIdx);
+                        if (eol < 0) eol = h.length();
+                        try {
+                            contentLength = Integer.parseInt(h.substring(clIdx + 15, eol).trim());
+                        } catch (Exception ignored) {}
+                    }
+                    // 2) 读取正文（JSON body）
+                    StringBuilder body = new StringBuilder();
+                    if (contentLength > 0 && contentLength < 65536) {
+                        byte[] buf = new byte[contentLength];
+                        int off = 0;
+                        while (off < contentLength) {
+                            int n = in.read(buf, off, contentLength - off);
+                            if (n < 0) break;
+                            off += n;
+                        }
+                        body.append(new String(buf, 0, off, "UTF-8"));
+                    } else {
+                        // 没有 Content-Length：读到连接关闭（兜底）
+                        byte[] tmp = new byte[2048];
+                        int n;
+                        while ((n = in.read(tmp)) != -1) body.append(new String(tmp, 0, n, "UTF-8"));
+                    }
+                    // 3) 兼容 JSON 和 query 两种格式：{"title":"..","text":".."} 或 title=..&text=..
+                    String raw = body.toString();
+                    String title = "", text = "";
+                    int ti = raw.indexOf("\"title\"");
+                    int tx = raw.indexOf("\"text\"");
+                    if (ti >= 0 || tx >= 0) {
+                        title = jsonField(raw, "title");
+                        text = jsonField(raw, "text");
+                    } else {
+                        title = queryField(raw, "title");
+                        text = queryField(raw, "text");
+                    }
+                    if (title.isEmpty()) title = "DeepSeek Harness";
+                    if (text.isEmpty()) text = "(空消息)";
+
+                    boolean granted = checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                            == PackageManager.PERMISSION_GRANTED;
+                    final boolean ok;
+                    if (granted) {
+                        postNotification(title, text);
+                        ok = true;
+                    } else {
+                        ok = false;
+                    }
+                    final String respBody = ok
+                            ? "{\"ok\":true}"
+                            : "{\"ok\":false,\"error\":\"通知权限未授予，无法发送通知\"}";
+                    BufferedWriter w = new BufferedWriter(new OutputStreamWriter(s.getOutputStream(), "UTF-8"));
+                    w.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                            + respBody.getBytes("UTF-8").length + "\r\nConnection: close\r\n\r\n" + respBody);
+                    w.flush();
+                    s.close();
+                } catch (Throwable t) {
+                    Log.w(TAG, "notify connection error", t);
+                    try { s.close(); } catch (Throwable ignored) {}
+                }
+            }
+        }, "notify-conn").start();
+    }
+
+    /** 从 JSON 里取字符串字段值（简易解析，不引第三方库）。 */
+    private String jsonField(String json, String key) {
+        try {
+            String k = "\"" + key + "\"";
+            int i = json.indexOf(k);
+            if (i < 0) return "";
+            int c = json.indexOf(':', i + k.length());
+            if (c < 0) return "";
+            int q1 = json.indexOf('"', c + 1);
+            if (q1 < 0) return "";
+            int q2 = json.indexOf('"', q1 + 1);
+            if (q2 < 0) return "";
+            return json.substring(q1 + 1, q2).replace("\\\"", "\"");
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** 从 query 字符串里取字段值（title=..&text=..）。 */
+    private String queryField(String q, String key) {
+        try {
+            String k = key + "=";
+            int i = q.indexOf(k);
+            if (i < 0) return "";
+            int e = q.indexOf('&', i + k.length());
+            if (e < 0) e = q.length();
+            return q.substring(i + k.length(), e).replace("+", " ");
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** 发一条 AI 通知（仅需 POST_NOTIFICATIONS，无需 Shizuku/root）。 */
+    private void postNotification(String title, String text) {
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return;
+            if (Build.VERSION.SDK_INT >= 26) {
+                NotificationChannel ch = new NotificationChannel(NOTIFY_CHANNEL_ID, NOTIFY_CHANNEL_NAME,
+                        NotificationManager.IMPORTANCE_DEFAULT);
+                ch.setDescription("AI 任务完成/需要你关注时推送");
+                nm.createNotificationChannel(ch);
+            }
+            Intent i = new Intent(this, MainActivity.class);
+            i.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            android.app.PendingIntent pi = android.app.PendingIntent.getActivity(this, 1, i,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
+            Notification.Builder b;
+            if (Build.VERSION.SDK_INT >= 26) {
+                b = new Notification.Builder(this, NOTIFY_CHANNEL_ID);
+            } else {
+                b = new Notification.Builder(this);
+            }
+            Notification n = b.setContentTitle(title)
+                    .setContentText(text)
+                    .setSmallIcon(R.drawable.ic_launcher)
+                    .setContentIntent(pi)
+                    .setAutoCancel(true)
+                    .build();
+            int id = (int) (System.currentTimeMillis() & 0x7fffffff);
+            nm.notify(id, n);
+            Log.i(TAG, "AI notification sent: " + title);
+        } catch (Throwable t) {
+            Log.w(TAG, "post notification failed", t);
+        }
     }
 
     // 探测外部公共目录是否可写（不需要"所有文件访问"时也能降级内部）
@@ -1120,6 +1376,11 @@ public class MainActivity extends Activity {
         env.put("TERM", "xterm");
         env.put("SHIZUKU_DEX", rishDex != null ? rishDex.getAbsolutePath() : "");
         env.put("SHIZUKU_APP_ID", "com.deepseek.harness");
+        // 特权通道可用性：root(su) 或 Shizuku。两者都未授予时，DSH 插件不注册特权工具，
+        // AI 不会反复尝试系统操作；文件读写仍可用 DSH 自带的 fs/bash 工具（只需存储权限）。
+        env.put("SHIZUKU_AVAILABLE", shizukuAvailable() ? "1" : "0");
+        env.put("ROOT_AVAILABLE", rootAvailable() ? "1" : "0");
+        env.put("APP_NOTIFY_PORT", String.valueOf(AI_NOTIFY_PORT));
         pb.redirectErrorStream(true);
 
         final Process proc = pb.start();

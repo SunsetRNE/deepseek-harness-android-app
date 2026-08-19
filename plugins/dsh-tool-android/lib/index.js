@@ -4,10 +4,13 @@
  * 覆盖：包管理（安装/卸载/清数据/授权）、应用管理（启动/强制停止）、
  *       系统设置读写、截图、模拟输入（点击/滑动/文本/按键）。
  *
- * 全部走 Shizuku shell 通道（app_process rish），与 dsh-tool-shizuku 共用同一套
- * 异步 spawn + sanitizeEnv + chmod 444 的 Android 兼容方案。
+ * 特权通道（由 MainActivity 探测后通过环境变量告知）：
+ *   - ROOT_AVAILABLE=1  ：设备有 root（su 可用），走 su -c 通道
+ *   - SHIZUKU_AVAILABLE=1：Shizuku 已授权，走 app_process rish 通道
+ * 两者都未授予时**不注册任何工具**：AI 工具列表里没有 android_*，
+ * 自然不会反复尝试系统操作；此时文件读写走 DSH 自带 fs/bash 工具。
  *
- * 审批策略：默认自动执行（用户已授权 Shizuku 通道）。设环境变量 SHIZUKU_APPROVE=ask
+ * 审批策略：默认自动执行（已授权通道）。设环境变量 SHIZUKU_APPROVE=ask
  * 时，危险操作（安装/卸载/清数据/授权/改设置/输入）会逐次弹审批框。
  */
 import { defineTool } from "@deepseek-ai/dsh-tools";
@@ -21,6 +24,11 @@ const APP_PROC = "/system/bin/app_process";
 const SHIZUKU_LOADER = "rikka.shizuku.shell.ShizukuShellLoader";
 const MAX_STDOUT = 8000;
 const MAX_STDERR = 2000;
+
+/** 特权通道是否可用（root 或 Shizuku 任一授予即可）。 */
+function privilegedAvailable() {
+  return process.env.ROOT_AVAILABLE === "1" || process.env.SHIZUKU_AVAILABLE === "1";
+}
 
 /** 危险操作白名单：SHIZUKU_APPROVE=ask 时这些 action 需要审批。 */
 const DANGEROUS_ACTIONS = new Set([
@@ -97,6 +105,54 @@ function shizukuCmd(command, dex, appId, timeoutMs) {
   });
 }
 
+/** 异步执行一条 root(su) 命令，结果结构与 shizukuCmd 一致。 */
+function suCmd(command, timeoutMs) {
+  const timeout = Math.max(1000, Math.min(timeoutMs || 30000, 120000));
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn("su", ["-c", command], {
+        env: sanitizeEnv(process.env),
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+    } catch (e) {
+      resolve({ ok: false, exit_code: -1, stdout: "", stderr: "", error: String(e && e.message || e) });
+      return;
+    }
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch (_) {} }, timeout);
+    const finish = (ok, exitCode, err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        ok,
+        exit_code: exitCode,
+        stdout: stdout.trim().slice(0, MAX_STDOUT),
+        stderr: stderr.trim().slice(0, MAX_STDERR),
+        ...(err ? { error: err } : {})
+      });
+    };
+    child.stdout.on("data", (d) => { stdout += d; });
+    child.stderr.on("data", (d) => { stderr += d; });
+    child.on("error", (e) => finish(false, -1, String(e && e.message || e)));
+    child.on("close", (code, signal) => {
+      if (signal === "SIGKILL" && code === null) finish(false, -1, "命令超时被强制终止");
+      else finish(code === 0, code ?? -1, undefined);
+    });
+  });
+}
+
+/** 选择特权通道执行：root(su) 优先，否则 Shizuku。 */
+function privCmd(command, timeoutMs) {
+  if (process.env.ROOT_AVAILABLE === "1") {
+    return suCmd(command, timeoutMs);
+  }
+  return shizukuCmd(command, process.env.SHIZUKU_DEX, process.env.SHIZUKU_APP_ID, timeoutMs);
+}
+
 /** 通用结果 schema（所有工具共用，避免 exit_code/exitCode 不匹配的坑）。 */
 function resultSchema(extraProps = {}) {
   return {
@@ -142,12 +198,17 @@ function apply(ctx) {
   const dex = () => process.env.SHIZUKU_DEX;
   const appId = () => process.env.SHIZUKU_APP_ID;
 
+  // 未授予 root 且未授予 Shizuku 时**不注册任何工具**：
+  // AI 工具列表里没有 android_*，就不会反复尝试系统操作；
+  // 此时文件读写用 DSH 自带的 fs/bash 工具（只需所有文件访问权限）。
+  if (!privilegedAvailable()) return;
+
   // 1) 包管理
   ctx.tools.register(defineTool({
     name: "android_package",
     description:
       "Android 包管理：列出已安装应用、安装 APK、卸载应用、清除应用数据、授予/撤销运行时权限。" +
-      "底层走 pm 命令（Shizuku shell 权限）。安装 APK 在部分 ColorOS 机型可能报 binder 限制，失败时提示用户手动安装。",
+      "底层走 pm 命令（root su 或 Shizuku 特权通道）。安装 APK 在部分 ColorOS 机型可能报 binder 限制，失败时提示用户手动安装。",
     parameters: {
       action: {
         type: "string", required: true,
@@ -180,14 +241,14 @@ function apply(ctx) {
         case "revoke": cmd = "pm revoke " + pkg + " " + perm; break;
         default: throw new Error("未知 action: " + a);
       }
-      return await shizukuCmd(cmd, dex(), appId(), 60000);
+      return await privCmd(cmd, 60000);
     }
   }));
 
   // 2) 应用管理
   ctx.tools.register(defineTool({
     name: "android_app",
-    description: "Android 应用管理：启动应用、强制停止应用、查看当前前台应用。底层走 am/dumpsys。",
+    description: "Android 应用管理：启动应用、强制停止应用、查看当前前台应用。底层走 am/dumpsys（root su 或 Shizuku 特权通道）。",
     parameters: {
       action: {
         type: "string", required: true,
@@ -213,7 +274,7 @@ function apply(ctx) {
         case "current": cmd = "dumpsys activity activities | grep -E 'mResumedActivity|mFocusedApp' | head -5"; break;
         default: throw new Error("未知 action: " + a);
       }
-      return await shizukuCmd(cmd, dex(), appId(), 30000);
+      return await privCmd(cmd, 30000);
     }
   }));
 
@@ -241,7 +302,7 @@ function apply(ctx) {
         case "list": cmd = "settings list " + ns; break;
         default: throw new Error("未知 action: " + a);
       }
-      return await shizukuCmd(cmd, dex(), appId(), 30000);
+      return await privCmd(cmd, 30000);
     }
   }));
 
@@ -265,7 +326,7 @@ function apply(ctx) {
       const path = args.save_path
         ? safe(args.save_path)
         : "/sdcard/DeepSeekHarness/screenshots/shot-" + ts + ".png";
-      const r = await shizukuCmd("mkdir -p " + path.substring(0, path.lastIndexOf("/")) + "; screencap -p " + path + " && echo __SHOT_OK__", dex(), appId(), 30000);
+      const r = await privCmd("mkdir -p " + path.substring(0, path.lastIndexOf("/")) + "; screencap -p " + path + " && echo __SHOT_OK__", 30000);
       return { ...r, path: r.ok ? path : "" };
     }
   }));
@@ -273,7 +334,7 @@ function apply(ctx) {
   // 5) 模拟输入
   ctx.tools.register(defineTool({
     name: "android_input",
-    description: "模拟用户输入（需 shell 权限）：点击坐标、滑动、输入文本、发送按键事件。用于自动化操作当前屏幕。坐标以屏幕像素为单位。",
+    description: "模拟用户输入（需特权通道 root/Shizuku）：点击坐标、滑动、输入文本、发送按键事件。用于自动化操作当前屏幕。坐标以屏幕像素为单位。",
     parameters: {
       action: { type: "string", required: true, enum: ["tap", "swipe", "text", "keyevent"], description: "tap=点击；swipe=滑动；text=输入文本；keyevent=按键" },
       x: { type: "number", description: "tap 的 x 坐标 / swipe 起点 x" },
@@ -300,7 +361,7 @@ function apply(ctx) {
         case "keyevent": cmd = "input keyevent " + Math.round(Number(args.keycode) || 0); break;
         default: throw new Error("未知 action: " + a);
       }
-      return await shizukuCmd(cmd, dex(), appId(), 15000);
+      return await privCmd(cmd, 15000);
     }
   }));
 }

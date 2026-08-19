@@ -28,7 +28,7 @@ import java.util.List;
 public class MainActivity extends Activity {
     private static final String MAIN_PKG = "com.deepseek.harness";
     private static final String EXT_ROOT = "DeepSeekHarness";
-    private static final String BUILTIN_REVISION = "20260818153801"; // 主 App v1.3.3 内置版本标记
+    private static final String BUILTIN_REVISION = "20260820024026"; // 主 App v1.4.0 内置版本标记
 
     private TextView log;
     private Button btnFix;
@@ -48,6 +48,9 @@ public class MainActivity extends Activity {
         items.add(new Item("内核入口 bin.js", base + "lib/bin.js", null));
         items.add(new Item("侧栏改造 layout/client.js", nbase + "dsh-client-ui-layout/lib/client.js", "gridColumn"));
         items.add(new Item("插件按钮 cordis/client.js", nbase + "dsh-client-ui-cordis/lib/client.js", "header.utilities"));
+        items.add(new Item("特权降级 shizuku/client.js", nbase + "dsh-tool-shizuku/lib/index.js", "privilegedAvailable"));
+        items.add(new Item("特权降级 android/client.js", nbase + "dsh-tool-android/lib/index.js", "privilegedAvailable"));
+        items.add(new Item("AI 通知工具 android_notify", nbase + "dsh-tool-shizuku/lib/index.js", "android_notify"));
         items.add(new Item("移动端样式 mobile.css", nbase + "dsh-web-frontend/dist/mobile.css", null));
         items.add(new Item("移动端脚本 mobile.js", nbase + "dsh-web-frontend/dist/mobile.js", null));
         items.add(new Item("前端入口 index.html", nbase + "dsh-web-frontend/dist/index.html", null));
@@ -231,6 +234,8 @@ public class MainActivity extends Activity {
         else if (it.path.endsWith("mobile.css")) assetName = "fix-res/mobile.css";
         else if (it.path.endsWith("mobile.js")) assetName = "fix-res/mobile.js";
         else if (it.path.endsWith("index.html")) assetName = "fix-res/index.html";
+        else if (it.path.endsWith("dsh-tool-shizuku/lib/index.js")) assetName = "fix-res/shizuku-index.js";
+        else if (it.path.endsWith("dsh-tool-android/lib/index.js")) assetName = "fix-res/android-index.js";
         if (assetName == null) return false;
         try {
             File target = new File(it.path);

@@ -1,5 +1,59 @@
 # DeepSeek Harness Android · 移动端优化改动清单
 
+## v1.4.0（可选特权降级 + 前台保活 + AI 通知 · 2026-08-20）
+
+> **背景**：此前系统操作（装应用/改设置/模拟输入）全部依赖 Shizuku，
+> 未授权时工具仍注册，AI 反复调用失败；且 root 设备无法利用 root 权限。
+> 用户诉求：不授予 root/Shizuku 也能正常使用（文件读写/预览/编辑只需
+> 「所有文件访问」权限），未授权时 AI 不要一直尝试调用特权工具；
+> AI 干活时 App 挂后台不被杀；AI 能发通知（只需通知权限）。
+
+### 功能
+- **特权通道二选一**：MainActivity 启动时探测 `su -c id`（root）与 Shizuku
+  授权状态，通过环境变量 `ROOT_AVAILABLE` / `SHIZUKU_AVAILABLE` 传给内核；
+  插件执行时 **root(su) 优先，否则 Shizuku**（新增 `suCmd`，与 rish 同构）。
+- **未授权不注册特权工具**（关键）：`dsh-tool-shizuku` / `dsh-tool-android`
+  在两者都未授予时**不注册** `shizuku_shell` / `android_*` —— AI 工具列表里
+  没有它们，自然不会反复尝试；只保留只读的 `shizuku_status` 供 AI 自查，
+  其描述明确提示"文件读写请用 fs/bash 工具（只需所有文件访问权限）"。
+  需要系统操作时 AI 会**引导用户授权**（弹 Shizuku 授权页），而非反复失败。
+- **文件操作不依赖特权**：DSH 内核自带 `dsh-tool-fs`（read/write/edit）与
+  bash 工具本就可用，授予「所有文件访问」即可编辑 /sdcard 文件，无需 Shizuku。
+- **前台保活服务（EngineService.java）**：引擎启动时 `startForegroundService`
+  拉起常驻通知服务（`foregroundServiceType="dataSync"`、START_STICKY），挂后台/
+  锁屏引擎持续运行、AI 后台任务不被杀；用户主动「退出」时停止服务。
+- **AI 发通知（android_notify 工具，仅需通知权限）**：MainActivity 起本地
+  ServerSocket `127.0.0.1:3081`，收到 `{"title","text"}` JSON 即发系统通知；
+  插件 `android_notify` **始终注册**（不依赖特权），端口由 `APP_NOTIFY_PORT`
+  环境变量指定。真机验证：标题/正文正常显示。
+- **权限引导页**：Shizuku 行改为「Shizuku / Root 特权（可选）」，文案说明
+  不授权也能正常使用；root 探测在后台线程执行并缓存（避免主线程跑 su、
+  避免 Magisk 弹窗反复触发），onResume 时重置重测。
+- 版本号：versionCode 5 → **6**，versionName 1.3.3 → **1.4.0**
+
+### 修复的 bug
+- **通知空消息**：`handleNotifyConnection` 用 `readLine()` 读到空行即停，但 HTTP
+  正文在空行之后 → title/text 永远为空。改为解析 Content-Length 后精确读 body。
+- **聊天记录互通（端口冲突）**：共存版与正式版抢 3080 端口，共存版引擎没起来时
+  WebView 直连正式版引擎 → 显示正式版聊天记录。共存版改独立端口 3082/3083。
+
+### DeepSeek Harness Lite（共存版，v1.4.0-lite）
+- 给"不敢直接升级正式版"的用户试用：包名 `com.deepseek.harness.beta`（与正式版
+  完全独立共存）、外部目录 `/sdcard/DeepSeekHarnessLite/`、独立端口 3082/3083、
+  独立 dshhome（API Key 需单独填）。
+- 真机验证通过：无 Shizuku 时 fs 工具建文件成功、聊天记录与正式版隔离、通知
+  标题正文正常、需特权时引导授权。
+
+### 验证
+- [x] 构建通过（versionCode 6，dex 含 MainActivity/EngineService 102336 bytes）
+- [x] 未授权场景：工具列表仅 shizuku_status（node 实测四种场景）
+- [x] 引擎自测 HTTP 200（payload 实测）
+- [x] 真机（Lite 版）：无 Shizuku 时 AI 成功创建 /sdcard/Download/test.txt
+- [x] 真机（Lite 版）：通知标题/正文正常显示
+- [x] 真机（Lite 版）：需特权操作时引导授权（弹 Shizuku 授权页）
+
+---
+
 ## v1.3.3（修复：相册出现大量"零分零秒视频" · 2026-08-18）
 
 > **背景**：外部运行目录 `/sdcard/DeepSeekHarness/dshroot` 含 2 万+ 文件

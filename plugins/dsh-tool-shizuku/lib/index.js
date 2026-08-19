@@ -1,7 +1,14 @@
 /**
- * Android Shizuku 工具插件：给 DeepSeek Harness 提供特权 shell 能力。
+ * Android Shizuku / Root 特权工具插件：给 DeepSeek Harness 提供特权 shell 能力。
  *
- * 默认在用户已授权的 Shizuku 通道下自动执行（无需逐次审批）。
+ * 特权通道（二选一，由 MainActivity 探测后通过环境变量告知）：
+ *   - ROOT_AVAILABLE=1  ：设备有 root（su 可用），走 su -c 通道
+ *   - SHIZUKU_AVAILABLE=1：Shizuku 已授权，走 app_process rish 通道
+ * 两者都未授予时（ROOT_AVAILABLE != 1 且 SHIZUKU_AVAILABLE != 1），
+ * **不注册特权工具** —— AI 的工具列表里没有 shizuku_shell，自然不会反复尝试调用；
+ * 此时文件读写走 DSH 自带的 fs/bash 工具（只需"所有文件访问权限"，无需特权）。
+ *
+ * 默认在已授权的通道下自动执行（无需逐次审批）。
  * 如需恢复"每次确认"，在 MainActivity 里给 node 设置环境变量 SHIZUKU_APPROVE=ask。
  *
  * 注意：使用异步 spawn 而非 spawnSync，避免同步阻塞 node 事件循环，
@@ -18,6 +25,11 @@ const APP_PROC = "/system/bin/app_process";
 const SHIZUKU_LOADER = "rikka.shizuku.shell.ShizukuShellLoader";
 const MAX_STDOUT = 8000;
 const MAX_STDERR = 2000;
+
+/** 特权通道是否可用（root 或 Shizuku 任一授予即可）。 */
+function privilegedAvailable() {
+  return process.env.ROOT_AVAILABLE === "1" || process.env.SHIZUKU_AVAILABLE === "1";
+}
 
 /**
  * 剥离会污染系统 app_process 链接的环境变量。
@@ -106,24 +118,192 @@ function shizukuCmd(command, dex, appId, timeoutMs) {
   });
 }
 
+/** 异步调用 su 执行一条 shell 命令（root 通道，与 shizukuCmd 相同的结果结构）。 */
+function suCmd(command, timeoutMs) {
+  const timeout = Math.max(1000, Math.min(timeoutMs || 30000, 120000));
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn("su", ["-c", command], {
+        env: sanitizeEnv(process.env),
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+    } catch (e) {
+      resolve({ ok: false, exit_code: -1, stdout: "", stderr: "", error: String(e && e.message || e) });
+      return;
+    }
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch (_) {}
+    }, timeout);
+
+    const finish = (ok, exitCode, err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        ok,
+        exit_code: exitCode,
+        stdout: stdout.trim().slice(0, MAX_STDOUT),
+        stderr: stderr.trim().slice(0, MAX_STDERR),
+        ...(err ? { error: err } : {})
+      });
+    };
+
+    child.stdout.on("data", (d) => { stdout += d; });
+    child.stderr.on("data", (d) => { stderr += d; });
+    child.on("error", (e) => finish(false, -1, String(e && e.message || e)));
+    child.on("close", (code, signal) => {
+      const killed = signal === "SIGKILL" && code === null;
+      if (killed) {
+        finish(false, -1, "命令超时（" + timeout + "ms）被强制终止");
+      } else {
+        finish(code === 0, code ?? -1, undefined);
+      }
+    });
+  });
+}
+
+/** 选择特权通道执行：root(su) 优先，否则 Shizuku。 */
+function privCmd(command, timeoutMs) {
+  if (process.env.ROOT_AVAILABLE === "1") {
+    return suCmd(command, timeoutMs);
+  }
+  return shizukuCmd(command, process.env.SHIZUKU_DEX, process.env.SHIZUKU_APP_ID, timeoutMs);
+}
+
 function apply(ctx) {
   const approval = () => ctx.get("approval");
+  const available = privilegedAvailable();
 
   // 1) 特权 shell（默认自动执行，SHIZUKU_APPROVE=ask 时逐次审批）
+  // 未授予 root 且未授予 Shizuku 时**不注册**本工具：AI 工具列表里没有它，
+  // 就不会反复尝试特权命令；此时文件读写应使用 DSH 自带的 fs/bash 工具。
+  if (available) {
+    ctx.tools.register(defineTool({
+      name: "shizuku_shell",
+      description:
+        "通过特权通道（root su 或 Shizuku，二选一，自动选择可用者）以系统 shell 权限执行一条命令，用于普通 bash 工具做不到的、需要系统/root 级权限的操作（例如 pm install/uninstall、am 启动/停止应用、settings 修改系统设置、dumpsys 查询系统状态、grant/revoke 运行时权限等）。" +
+        "命令会在已授权的通道下自动执行（默认无需逐次确认）；仅当环境变量 SHIZUKU_APPROVE=ask 时才需要逐次审批。优先用普通 `bash` 工具，只有确实需要系统特权时才用本工具。",
+      parameters: {
+        command: {
+          type: "string",
+          required: true,
+          description: "要执行的 shell 命令。会以系统/root 权限运行，请写清楚、可审计。"
+        },
+        timeout_ms: {
+          type: "number",
+          description: "超时毫秒，默认 30000，最大 120000。"
+        }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", required: true },
+            exit_code: { type: "number" },
+            stdout: { type: "string" },
+            stderr: { type: "string" },
+            error: { type: "string" }
+          }
+        },
+        render: (_args, value) => [{
+          type: "text",
+          text: (value.ok ? "" : "执行失败：" + (value.error || value.stderr || "未知错误") + "\n\n") +
+            "exit_code: " + value.exit_code + "\n" +
+            (value.stdout ? "stdout:\n" + value.stdout : "") +
+            (value.stderr ? "\nstderr:\n" + value.stderr : "")
+        }]
+      },
+      async execute(args, exec) {
+        // 审批：默认自动允许。如需每次确认，设 SHIZUKU_APPROVE=ask。
+        if (process.env.SHIZUKU_APPROVE === "ask") {
+          const approver = approval();
+          if (approver === undefined) {
+            throw new Error("审批服务未挂载，无法安全执行特权命令");
+          }
+          const reason = "特权命令：" + args.command;
+          const outcome = await approver.request({
+            agent: exec.agent,
+            toolName: "shizuku_shell",
+            callId: exec.callId,
+            reason,
+            signal: exec.signal
+          });
+          if (outcome !== "allowed-once") {
+            throw new Error(`特权命令未获批准（${outcome}）：${args.command}`);
+          }
+        }
+        return await privCmd(args.command, args.timeout_ms);
+      }
+    }));
+  }
+
+  // 2) 授权状态探测（只读，不审批）。未授权时仍注册：AI 能自查"为什么没有特权工具"，
+  //    得到"未授权"后就不会反复尝试特权命令；此时文件操作用 fs/bash 工具。
   ctx.tools.register(defineTool({
-    name: "shizuku_shell",
-    description:
-      "通过 Shizuku（Android 特权通道）以系统 shell 权限执行一条命令，用于普通 bash 工具做不到的、需要系统/root 级权限的操作（例如 pm install/uninstall、am 启动/停止应用、settings 修改系统设置、dumpsys 查询系统状态、grant/revoke 运行时权限等）。" +
-      "命令会在用户已授权的 Shizuku 通道下自动执行（默认无需逐次确认）；仅当环境变量 SHIZUKU_APPROVE=ask 时才需要逐次审批。优先用普通 `bash` 工具，只有确实需要系统特权时才用本工具。",
+    name: "shizuku_status",
+    description: "检查特权通道（root/Shizuku）是否可用且已授权。返回是否可用，以及失败时的原因。未授权时文件读写请使用 fs/bash 工具（只需所有文件访问权限），无需特权。",
+    parameters: {},
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          available: { type: "boolean", required: true },
+          channel: { type: "string" },
+          detail: { type: "string" }
+        }
+      },
+      render: (_args, value) => [{
+        type: "text",
+        text: value.available
+          ? "特权通道可用（" + value.channel + "）"
+          : "特权通道不可用：" + (value.detail || "未知原因") + "；文件读写请用 fs/bash 工具"
+      }]
+    },
+    async execute() {
+      if (process.env.ROOT_AVAILABLE === "1") {
+        return { available: true, channel: "root(su)", detail: "已授予 root 权限" };
+      }
+      if (process.env.SHIZUKU_AVAILABLE === "1") {
+        return { available: true, channel: "shizuku", detail: "Shizuku 已授权" };
+      }
+      const dex = process.env.SHIZUKU_DEX;
+      if (!dex) return { available: false, channel: "none", detail: "root 与 Shizuku 均未授予" };
+      const r = await shizukuCmd("echo __SHIZUKU_OK__", dex, process.env.SHIZUKU_APP_ID, 10000);
+      const available = r.ok && r.stdout.includes("__SHIZUKU_OK__");
+      let detail;
+      if (available) {
+        detail = "Shizuku 可用";
+      } else if (r.error || /Permission denied|not found|Aborted|CANNOT LINK|Writable dex/i.test(r.stderr || "")) {
+        detail = "Shizuku 服务端未运行或本应用未授权：" + (r.stderr || r.error || r.stdout || "未知错误");
+      } else {
+        detail = r.stdout || r.stderr || r.error || "未授权或未运行";
+      }
+      return { available, channel: "shizuku", detail };
+    }
+  }));
+
+  // 3) AI 发通知（**不依赖特权**：只需 App 通知权限，走本地 127.0.0.1:3081）
+  // 始终注册：即使没有 root/Shizuku，只要用户在系统设置里给了通知权限就能发。
+  ctx.tools.register(defineTool({
+    name: "android_notify",
+    description: "向用户手机发送一条系统通知（标题 + 正文）。**只需要通知权限（POST_NOTIFICATIONS），不需要 Shizuku/root**。用于：后台任务完成、需要用户关注、长时间任务的进度提醒等。如果返回 ok:false 且提示通知权限未授予，请让用户在系统设置里为本应用开启通知权限后重试。",
     parameters: {
-      command: {
+      title: {
         type: "string",
         required: true,
-        description: "要执行的 shell 命令。会以系统 shell 权限运行，请写清楚、可审计。"
+        description: "通知标题，简短（建议不超过 20 字）。"
       },
-      timeout_ms: {
-        type: "number",
-        description: "超时毫秒，默认 30000，最大 120000。"
+      text: {
+        type: "string",
+        required: true,
+        description: "通知正文，说明发生了什么或需要用户做什么。"
       }
     },
     output: {
@@ -132,76 +312,43 @@ function apply(ctx) {
         additionalProperties: false,
         properties: {
           ok: { type: "boolean", required: true },
-          exit_code: { type: "number" },
-          stdout: { type: "string" },
-          stderr: { type: "string" },
           error: { type: "string" }
         }
       },
       render: (_args, value) => [{
         type: "text",
-        text: (value.ok ? "" : "执行失败：" + (value.error || value.stderr || "未知错误") + "\n\n") +
-          "exit_code: " + value.exit_code + "\n" +
-          (value.stdout ? "stdout:\n" + value.stdout : "") +
-          (value.stderr ? "\nstderr:\n" + value.stderr : "")
+        text: value.ok ? "通知已发送 ✅" : "通知发送失败：" + (value.error || "未知错误")
       }]
     },
-    async execute(args, exec) {
-      // 审批：默认自动允许。如需每次确认，设 SHIZUKU_APPROVE=ask。
-      if (process.env.SHIZUKU_APPROVE === "ask") {
-        const approver = approval();
-        if (approver === undefined) {
-          throw new Error("审批服务未挂载，无法安全执行特权命令");
-        }
-        const reason = "Shizuku 特权命令：" + args.command;
-        const outcome = await approver.request({
-          agent: exec.agent,
-          toolName: "shizuku_shell",
-          callId: exec.callId,
-          reason,
-          signal: exec.signal
+    async execute(args) {
+      try {
+        const http = await import("node:http");
+        const port = Number(process.env.APP_NOTIFY_PORT) || 3081;
+        const body = JSON.stringify({ title: String(args.title || ""), text: String(args.text || "") });
+        const result = await new Promise((resolve) => {
+          const req = http.request({
+            host: "127.0.0.1",
+            port,
+            path: "/notify",
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
+          }, (res) => {
+            let d = "";
+            res.on("data", (c) => d += c);
+            res.on("end", () => {
+              try { resolve(JSON.parse(d || "{}")); }
+              catch (e) { resolve({ ok: false, error: "响应解析失败" }); }
+            });
+          });
+          req.setTimeout(5000, () => { req.destroy(); resolve({ ok: false, error: "通知服务超时" }); });
+          req.on("error", (e) => resolve({ ok: false, error: String(e && e.message || e) }));
+          req.write(body);
+          req.end();
         });
-        if (outcome !== "allowed-once") {
-          throw new Error(`特权命令未获批准（${outcome}）：${args.command}`);
-        }
+        return result;
+      } catch (e) {
+        return { ok: false, error: String(e && e.message || e) };
       }
-      return await shizukuCmd(args.command, process.env.SHIZUKU_DEX, process.env.SHIZUKU_APP_ID, args.timeout_ms);
-    }
-  }));
-
-  // 2) 授权状态探测（只读，不审批）
-  ctx.tools.register(defineTool({
-    name: "shizuku_status",
-    description: "检查 Shizuku 是否可用且当前应用已获授权。返回是否可用，以及失败时的原因（例如用户尚未在 Shizuku App 里授权本应用，或 Shizuku 服务端未运行）。",
-    parameters: {},
-    output: {
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          available: { type: "boolean", required: true },
-          detail: { type: "string" }
-        }
-      },
-      render: (_args, value) => [{
-        type: "text",
-        text: value.available ? "Shizuku 可用且已授权" : "Shizuku 不可用：" + (value.detail || "未知原因")
-      }]
-    },
-    async execute() {
-      const dex = process.env.SHIZUKU_DEX;
-      if (!dex) return { available: false, detail: "SHIZUKU_DEX 未配置" };
-      const r = await shizukuCmd("echo __SHIZUKU_OK__", dex, process.env.SHIZUKU_APP_ID, 10000);
-      const available = r.ok && r.stdout.includes("__SHIZUKU_OK__");
-      let detail;
-      if (available) {
-        detail = "可用";
-      } else if (r.error || /Permission denied|not found|Aborted|CANNOT LINK|Writable dex/i.test(r.stderr || "")) {
-        detail = "Shizuku 服务端未运行或本应用未授权：" + (r.stderr || r.error || r.stdout || "未知错误");
-      } else {
-        detail = r.stdout || r.stderr || r.error || "未授权或未运行";
-      }
-      return { available, detail };
     }
   }));
 }
