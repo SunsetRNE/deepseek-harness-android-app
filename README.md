@@ -102,6 +102,16 @@ docs/开发指南.md            项目开发指南（架构/常用命令/注意�
 > ⚠️ 这是源码与配置仓库，**不含 APK 二进制、签名密钥（release.jks）、node 运行时、payload.zip、凭证文件**。
 > 📦 安装包（DeepSeekHarness.apk）、node 运行时与 DSH 内核分块包见 [Releases](https://github.com/woaiys3/deepseek-harness-android-app/releases)；构建源码前需准备 runtime/ 与 dshroot/（分块包合并方法见 Release 说明）。
 
+## 💬 交流讨论
+
+遇到问题、想提建议、或想交流用法？欢迎加入 QQ 群 / QQ 频道：
+
+| QQ 群 | QQ 频道 |
+|---|---|
+| ![QQ 群](docs/qq-group.jpg) | ![QQ 频道](docs/qq-channel.jpg) |
+
+> 也可以直接在 [Issues](https://github.com/woaiys3/deepseek-harness-android-app/issues) 反馈，我会尽快回复。
+
 ## 📄 许可证
 
 本项目源码采用 [MIT](LICENSE) 许可证。
