@@ -1,5 +1,39 @@
 # DeepSeek Harness Android · 移动端优化改动清单
 
+## v1.5.0（⚠️ 测试版本：功能增强 + 稳定性修复 · 2026-08-21）
+
+> ⚠️ **本版本为测试版本（非正式版）**：新功能已实现且主要链路验证通过，
+> 但**端口冲突处理存在已知 bug**（3080 被占用时引擎可能起不来，下版本修），
+> 且定时任务等新功能仍需更多真机验证。发布目的是让用户提前体验，**不保证完全稳定**。
+
+### 新功能
+- **① 端口冲突处理**（⚠️ 有 bug，见下）：默认端口被占时自动换空闲端口（3081~3099）
+- **② ABI 检测**：非 arm64 设备启动时提示（引擎仅支持 64 位）
+- **③ 补丁启动自检**：`cordis.patch.yml` 缺失/被改坏时自动从 APK 恢复（防"没带禁用配置启动失败"）
+- **④ 电池优化引导**：未设"不限制"时弹窗引导（防后台被杀）
+- **⑤ 本地设置通道**：`android_setting_app` 工具——给「修改系统设置」权限即可改亮度/音量/超时等（免 Shizuku）；**音量走 AudioManager 真实生效**（修复 Settings.System 记录不生效的坑）
+- **⑥ 定时任务**：`android_schedule` 工具——AlarmManager 系统闹钟 + 前台服务执行，到点**自动拉起引擎执行任务**（无需用户操作），结果可发通知
+- **⑦ 剪贴板工具**：`android_clipboard`——AI 读写剪贴板（免权限）
+- **⑧ 更新提示**：启动时查 GitHub 最新版，有新版弹窗引导下载
+
+### 已修复
+- **音量调节不生效**：`Settings.System.putInt("volume_music")` 只改记录不调音量 → 改走 `AudioManager.setStreamVolume` 真实生效；工具输出 schema 补 `stream/level/max` 字段（修复"写入成功但报输出无效"）
+- **定时任务只发通知不执行**：BroadcastReceiver 里跑线程会被系统回收 → 改走**前台服务**执行；闹钟改 `setAlarmClock`（无需权限、Doze 也触发）；**DSH API 调用格式修正**（缺 `type/rpcId/method/payload` 包装 → 补全）；**sessionId 解析修正**（indexOf 偏移错误 → 精确匹配 `"sessionId":"`）
+- **定时任务执行日志**：写到外部目录（`/sdcard/DeepSeekHarnessLite/scheduled-log.txt` / `DeepSeekHarness/scheduled-log.txt`），便于排查
+
+### ⚠️ 已知问题（下版本修）
+- **① 端口冲突处理有 bug**：3080 被占时换端口后引擎可能未在目标端口启动（WebView 显示占位服务内容）；连带 `ScheduleExecutor` 固定端口与主引擎换端口后不一致。**v1.5.1 修**
+
+### 验证
+- [x] 音量（AudioManager + schema）：真机通过
+- [x] 定时任务（闹钟→前台服务→自动执行→结果通知）：真机通过（scheduled-log 确认"任务已发送给 AI"）
+- [x] 剪贴板：真机通过
+- [x] 编译：63 class + 2 插件无错误
+- [ ] 端口冲突（已知 bug，待修）
+- [ ] 补丁自检 / 电池优化引导 / ABI / 更新提示：逻辑简单，未逐一真机验证
+
+---
+
 ## v1.4.0（可选特权降级 + 前台保活 + AI 通知 · 2026-08-20）
 
 > **背景**：此前系统操作（装应用/改设置/模拟输入）全部依赖 Shizuku，

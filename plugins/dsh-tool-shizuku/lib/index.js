@@ -351,6 +351,197 @@ function apply(ctx) {
       }
     }
   }));
+
+  // 4) 本地设置（**不依赖特权**：只需 App 的「修改系统设置」WRITE_SETTINGS 权限，改 Settings.System 各项）
+  ctx.tools.register(defineTool({
+    name: "android_setting_app",
+    description:
+      "通过 App 自身的 WRITE_SETTINGS 权限修改系统设置（Settings.System 命名空间）。**不需要 Shizuku/root**，但需要用户在权限引导页或系统设置里授予「修改系统设置」权限。" +
+      "常用 key：screen_brightness（亮度 0-255）、screen_brightness_mode（0=手动 1=自动）、screen_off_timeout（屏幕超时毫秒，如 60000）、" +
+      "accelerometer_rotation（自动旋转 0/1）、font_scale（字体大小，如 1.0/1.3）、volume_music/volume_ring/volume_alarm/volume_notification（音量 0-15）、" +
+      "sound_effects_enabled（触摸音 0/1）、haptic_feedback_enabled（震动反馈 0/1）、notification_light_pulse（通知灯 0/1）、ringtone（铃声 Uri）。" +
+      "改全局设置（Global/Secure 命名空间）请用 shizuku_shell 的 settings 命令（需要特权）。",
+    parameters: {
+      key: {
+        type: "string", required: true,
+        description: "Settings.System 的 key（见工具描述常用清单）"
+      },
+      value: {
+        type: "string", required: true,
+        description: "要写入的值（数字或字符串）"
+      }
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean", required: true },
+          error: { type: "string" },
+          stream: { type: "string" },
+          level: { type: "number" },
+          max: { type: "number" }
+        }
+      },
+      render: (_args, value) => [{
+        type: "text",
+        text: value.ok
+          ? (value.stream ? "已设置 " + value.stream + " = " + value.level + "（最大 " + value.max + "）✅" : "系统设置已修改 ✅")
+          : "修改失败：" + (value.error || "未知错误")
+      }]
+    },
+    async execute(args) {
+      try {
+        const http = await import("node:http");
+        const port = Number(process.env.APP_NOTIFY_PORT) || 3081;
+        const body = JSON.stringify({ key: String(args.key || ""), value: String(args.value == null ? "" : args.value) });
+        const result = await new Promise((resolve) => {
+          const req = http.request({
+            host: "127.0.0.1", port, path: "/setting", method: "POST",
+            headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
+          }, (res) => {
+            let d = "";
+            res.on("data", (c) => d += c);
+            res.on("end", () => {
+              try { resolve(JSON.parse(d || "{}")); }
+              catch (e) { resolve({ ok: false, error: "响应解析失败" }); }
+            });
+          });
+          req.setTimeout(5000, () => { req.destroy(); resolve({ ok: false, error: "本地服务超时" }); });
+          req.on("error", (e) => resolve({ ok: false, error: String(e && e.message || e) }));
+          req.write(body);
+          req.end();
+        });
+        return result;
+      } catch (e) {
+        return { ok: false, error: String(e && e.message || e) };
+      }
+    }
+  }));
+
+  // 5) 剪贴板（**不依赖特权**：读写系统剪贴板，无需任何特殊权限）
+  ctx.tools.register(defineTool({
+    name: "android_clipboard",
+    description: "读写手机剪贴板。**不需要 Shizuku/root 和任何特殊权限**。action=read 读取当前剪贴板内容；action=write 把 content 写入剪贴板（如 AI 生成代码/文本后让用户粘贴）。",
+    parameters: {
+      action: {
+        type: "string", required: true,
+        enum: ["read", "write"],
+        description: "read=读取剪贴板内容；write=写入剪贴板（需带 content）"
+      },
+      content: { type: "string", description: "write 时要写入的文本内容" }
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean", required: true },
+          content: { type: "string" },
+          error: { type: "string" }
+        }
+      },
+      render: (_args, value) => [{
+        type: "text",
+        text: value.ok
+          ? (value.content !== undefined ? "剪贴板内容：\n" + value.content : "已写入剪贴板 ✅")
+          : "剪贴板操作失败：" + (value.error || "未知错误")
+      }]
+    },
+    async execute(args) {
+      try {
+        const http = await import("node:http");
+        const port = Number(process.env.APP_NOTIFY_PORT) || 3081;
+        const body = JSON.stringify({
+          action: String(args.action || "read"),
+          content: String(args.content == null ? "" : args.content)
+        });
+        const result = await new Promise((resolve) => {
+          const req = http.request({
+            host: "127.0.0.1", port, path: "/clipboard", method: "POST",
+            headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
+          }, (res) => {
+            let d = "";
+            res.on("data", (c) => d += c);
+            res.on("end", () => {
+              try { resolve(JSON.parse(d || "{}")); }
+              catch (e) { resolve({ ok: false, error: "响应解析失败" }); }
+            });
+          });
+          req.setTimeout(5000, () => { req.destroy(); resolve({ ok: false, error: "本地服务超时" }); });
+          req.on("error", (e) => resolve({ ok: false, error: String(e && e.message || e) }));
+          req.write(body);
+          req.end();
+        });
+        return result;
+      } catch (e) {
+        return { ok: false, error: String(e && e.message || e) };
+      }
+    }
+  }));
+
+  // 6) 定时任务（**不依赖特权**：走系统 AlarmManager，到点自动拉起引擎执行任务，无需用户操作）
+  ctx.tools.register(defineTool({
+    name: "android_schedule",
+    description:
+      "设置一个定时任务：到点后**自动执行**（使用 Android AlarmManager + 自动拉起引擎，即使 App 不在前台也会执行，无需用户操作）。" +
+      "适用：'10 分钟后帮我整理 /sdcard/Download 文件夹'、'明早 8 点提醒我打卡' 等。" +
+      "执行方式：到点时 App 自动启动引擎，把任务文本作为消息发送给 AI 自动执行（需要 App 内已配置 API Key），完成后可配合 android_notify 通知用户。" +
+      "参数：text=任务内容（要 AI 做的事，如 '整理下载文件夹'）；when=触发时间，支持相对秒数（如 600=10分钟后）或时间字符串（如 '08:00'=今天/明天8点、'2026-08-21 08:00:00'）。",
+    parameters: {
+      text: {
+        type: "string", required: true,
+        description: "提醒内容，例如 '10 分钟后提醒我喝水' 的 '喝水'"
+      },
+      when: {
+        type: "string", required: true,
+        description: "触发时间：纯数字=相对秒数（600=10分钟后）；'HH:mm'=今天/明天该时刻；'yyyy-MM-dd HH:mm:ss'=具体时间"
+      }
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean", required: true },
+          at: { type: "string" },
+          hint: { type: "string" },
+          error: { type: "string" }
+        }
+      },
+      render: (_args, value) => [{
+        type: "text",
+        text: value.ok ? "定时已设置（" + (value.at || "") + "）\n" + (value.hint || "") : "设置失败：" + (value.error || "未知错误")
+      }]
+    },
+    async execute(args) {
+      try {
+        const http = await import("node:http");
+        const port = Number(process.env.APP_NOTIFY_PORT) || 3081;
+        const body = JSON.stringify({ text: String(args.text || ""), when: String(args.when || "") });
+        const result = await new Promise((resolve) => {
+          const req = http.request({
+            host: "127.0.0.1", port, path: "/schedule", method: "POST",
+            headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
+          }, (res) => {
+            let d = "";
+            res.on("data", (c) => d += c);
+            res.on("end", () => {
+              try { resolve(JSON.parse(d || "{}")); }
+              catch (e) { resolve({ ok: false, error: "响应解析失败" }); }
+            });
+          });
+          req.setTimeout(5000, () => { req.destroy(); resolve({ ok: false, error: "本地服务超时" }); });
+          req.on("error", (e) => resolve({ ok: false, error: String(e && e.message || e) }));
+          req.write(body);
+          req.end();
+        });
+        return result;
+      } catch (e) {
+        return { ok: false, error: String(e && e.message || e) };
+      }
+    }
+  }));
 }
 
 export { apply, inject, name };

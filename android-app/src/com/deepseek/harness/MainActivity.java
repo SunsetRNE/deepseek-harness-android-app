@@ -66,7 +66,9 @@ import rikka.shizuku.Shizuku;
 
 public class MainActivity extends Activity {
     private static final String TAG = "DeepSeekHarness";
-    private static final String URL_HOME = "http://127.0.0.1:3080";
+    // 引擎端口：默认 3080；若被占用（Termux 残留/其他进程）自动换空闲端口（①端口冲突处理）
+    private int enginePort = 3080;
+    private String homeUrl() { return "http://127.0.0.1:" + enginePort; }
     // bin.js 相对 dshroot 目录的路径（dshroot 可能位于外部公共目录或内部 fallback）
     private static final String REL_BINJS = "lib/node_modules/@deepseek-ai/dsh/lib/bin.js";
     // 外部 dshroot 公共目录名（挂在 /sdcard 下，卸载不丢；node 二进制/凭证仍留内部）
@@ -121,6 +123,9 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         installCrashHandler();
+        checkAbiCompat(); // ② ABI 检测：非 arm64 设备引擎可能无法运行，弹提示
+        checkBatteryOptimization(); // ④ 电池优化引导：被限制时提示（挂后台可能被杀）
+        checkForUpdate(); // ⑧ 更新提示：GitHub 有新版时提示（后台线程，不阻塞启动）
 
         webView = new WebView(this);
         WebSettings ws = webView.getSettings();
@@ -146,7 +151,7 @@ public class MainActivity extends Activity {
                     errorRetries++;
                     final WebView wv = view;
                     view.postDelayed(new Runnable() {
-                        @Override public void run() { wv.loadUrl(URL_HOME); }
+                        @Override public void run() { wv.loadUrl(homeUrl()); }
                     }, 2500L);
                 }
             }
@@ -194,12 +199,21 @@ public class MainActivity extends Activity {
 
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         if (prefs.getBoolean("setup_done", false)) {
+            // 定时任务自动执行：闹钟到点可能带着 scheduledTask extra 启动本 Activity
+            Intent in = getIntent();
+            if (in != null) {
+                String task = in.getStringExtra("scheduledTask");
+                if (task != null && !task.isEmpty()) pendingScheduledTask = task;
+            }
             showEngineScreen();
             startEngine();
         } else {
             showPermissionScreen();
         }
     }
+
+    // 定时任务自动执行：闹钟到点带来的任务文本（引擎就绪后自动 prompt 执行）
+    private String pendingScheduledTask = null;
 
     private int dp(int v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
@@ -334,6 +348,140 @@ public class MainActivity extends Activity {
             f.delete();
         }
         return total;
+    }
+
+    // ② ABI 检测：node 引擎仅 arm64，非 arm64 设备会启动失败——尽早提示用户
+    private void checkAbiCompat() {
+        try {
+            if (Build.SUPPORTED_ABIS == null || Build.SUPPORTED_ABIS.length == 0) return;
+            String abi = Build.SUPPORTED_ABIS[0];
+            boolean arm64 = abi.startsWith("arm64") || abi.contains("arm64-v8a");
+            if (arm64) return; // 支持，正常继续
+            // 32 位设备：引擎（node arm64 二进制）无法运行，提示但不阻止（用户可能知道自己在做什么）
+            ui.post(new Runnable() {
+                @Override public void run() {
+                    try {
+                        new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("设备架构不受支持")
+                                .setMessage("当前设备为 32 位（" + abi + "），而 DSH 引擎仅支持 64 位（arm64）。\n\nAI 引擎可能无法启动，建议更换 64 位设备使用。")
+                                .setNegativeButton("知道了", null)
+                                .show();
+                    } catch (Throwable ignored) {}
+                }
+            });
+        } catch (Throwable t) {
+            Log.w(TAG, "checkAbiCompat error", t);
+        }
+    }
+
+    // ④ 电池优化引导：App 被系统限制后台时，引擎挂后台可能被杀——提示用户设"不限制"
+    private void checkBatteryOptimization() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm == null) return;
+            if (pm.isIgnoringBatteryOptimizations(getPackageName())) return; // 已"不限制"，正常
+            ui.post(new Runnable() {
+                @Override public void run() {
+                    try {
+                        new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("建议：允许后台运行")
+                                .setMessage("当前应用被系统限制后台活动，AI 执行任务时挂后台可能被系统杀掉。\n\n建议将本应用设为「不限制」电池优化，确保任务持续运行。")
+                                .setPositiveButton("去设置", new DialogInterface.OnClickListener() {
+                                    @Override public void onClick(DialogInterface d, int w) {
+                                        openSystemSetting(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                                    }
+                                })
+                                .setNegativeButton("暂不", null)
+                                .show();
+                    } catch (Throwable ignored) {}
+                }
+            });
+        } catch (Throwable t) {
+            Log.w(TAG, "checkBatteryOptimization error", t);
+        }
+    }
+
+    // ⑧ 更新提示：后台查 GitHub Releases 最新 tag，与本地 versionName 比对，有新版弹提示
+    private void checkForUpdate() {
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    URL url = new URL("https://api.github.com/repos/woaiys3/deepseek-harness-android-app/releases/latest");
+                    HttpURLConnection c = (HttpURLConnection) url.openConnection();
+                    c.setConnectTimeout(5000);
+                    c.setReadTimeout(5000);
+                    c.setRequestProperty("User-Agent", "dsh-android");
+                    int code = c.getResponseCode();
+                    if (code != 200) { c.disconnect(); return; }
+                    InputStream in = c.getInputStream();
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    byte[] b = new byte[4096];
+                    int n;
+                    while ((n = in.read(b)) > 0) out.write(b, 0, n);
+                    in.close();
+                    c.disconnect();
+                    String json = new String(out.toByteArray(), "UTF-8");
+                    // 解析 "tag_name":"vX.Y.Z"
+                    String tag = null;
+                    int ti = json.indexOf("\"tag_name\"");
+                    if (ti >= 0) {
+                        int q1 = json.indexOf('"', ti + 10);
+                        int q2 = q1 >= 0 ? json.indexOf('"', q1 + 1) : -1;
+                        if (q1 >= 0 && q2 > q1) tag = json.substring(q1 + 1, q2);
+                    }
+                    if (tag == null || tag.isEmpty()) return;
+                    String latest = tag.replace("v", "").replace("-lite", "").replace("-beta", "");
+                    String local = "";
+                    try { local = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Throwable ignored) {}
+                    // 只比较主版本号（数字部分），忽略后缀
+                    final String fLocal = local;
+                    if (isNewerVersion(latest, fLocal)) {
+                        final String ftag = tag;
+                        ui.post(new Runnable() {
+                            @Override public void run() {
+                                try {
+                                    new AlertDialog.Builder(MainActivity.this)
+                                            .setTitle("发现新版本 " + ftag)
+                                            .setMessage("当前版本 " + fLocal + "，最新 " + ftag + "。\n\n前往 GitHub Releases 下载更新（正式版 / Lite 共存版可选）。")
+                                            .setPositiveButton("去下载", new DialogInterface.OnClickListener() {
+                                                @Override public void onClick(DialogInterface d, int w) {
+                                                    try {
+                                                        startActivity(new Intent(Intent.ACTION_VIEW,
+                                                                Uri.parse("https://github.com/woaiys3/deepseek-harness-android-app/releases")));
+                                                    } catch (Throwable ignored) {}
+                                                }
+                                            })
+                                            .setNegativeButton("稍后", null)
+                                            .show();
+                                } catch (Throwable ignored) {}
+                            }
+                        });
+                    }
+                } catch (Throwable t) {
+                    // 网络失败/离线时静默跳过（不打扰用户）
+                }
+            }
+        }, "update-check").start();
+    }
+
+    /** 简单版本号比较："1.4.0" vs "1.3.3" → true（1.4.0 更新）。 */
+    private boolean isNewerVersion(String latest, String local) {
+        try {
+            String[] a = latest.split("\\.");
+            String[] b = (local == null ? "" : local).split("\\.");
+            for (int i = 0; i < Math.max(a.length, b.length); i++) {
+                int x = i < a.length ? parseIntSafe(a[i]) : 0;
+                int y = i < b.length ? parseIntSafe(b[i]) : 0;
+                if (x != y) return x > y;
+            }
+            return false;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private int parseIntSafe(String s) {
+        try { return Integer.parseInt(s.trim()); } catch (Throwable t) { return 0; }
     }
 
     // 捕获未处理异常，写到外部崩溃日志（便于无 adb 时排查闪退）
@@ -816,8 +964,9 @@ public class MainActivity extends Activity {
 
     // ============ 引擎启动（原逻辑）============
     private void startEngine() {
+        resolveEnginePort();       // ① 端口冲突处理：3080 被占用时自动换空闲端口
         startKeepAliveService();   // 前台保活：挂后台不被杀（引擎持续运行）
-        startNotifyServer();       // AI 发通知通道：本地 127.0.0.1:3081，只需通知权限
+        startNotifyServer();       // AI 发通知通道：本地 127.0.0.1:<notifyPort>，只需通知权限
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
@@ -876,6 +1025,7 @@ public class MainActivity extends Activity {
 
                     applyLinks(payload);
                     setExecutables(payload);
+                    ensurePatchConfig(payload); // ③ 补丁启动自检：cordis.patch.yml 缺失/被改则自动补齐
                     if (healthOk()) { loadHome(); return; }
                     showIndeterminate("正在启动 DeepSeek Harness…");
                     spawnNode(payload);
@@ -886,6 +1036,65 @@ public class MainActivity extends Activity {
                 }
             }
         }, "engine-boot").start();
+    }
+
+    // ============ ③ 补丁启动自检 ============
+    /** 检查内部 dshhome/cordis.patch.yml 是否完整（含禁用的三个插件），
+     *  缺失/被外部改动破坏则从 payload.zip 重新提取官方配置（幂等）。
+     *  背景：补丁配置被改/删会导致 llm-pi-ai/sandbox/bash-sandbox 启用失败 → 启动崩溃。 */
+    private void ensurePatchConfig(File payload) {
+        try {
+            File patch = new File(payload, "dshhome/cordis.patch.yml");
+            boolean need = !patch.exists();
+            if (!need) {
+                String content = readFileText(patch);
+                // 关键禁用项缺任一 → 视为损坏，重新提取
+                need = !(content.contains("llm-pi-ai") && content.contains("sandbox")
+                        && content.contains("bash-sandbox") && content.contains("disabled: true"));
+            }
+            if (need) {
+                Log.w(TAG, "cordis.patch.yml missing or incomplete, restoring from payload.zip");
+                refreshInternalConfig(payload); // 重新覆盖 dshhome 官方配置（凭证/会话保留）
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "ensurePatchConfig error", t);
+        }
+    }
+
+    // ============ ① 端口冲突处理 ============
+    /** 探测引擎端口是否被占用：
+     *  - 默认端口已被本 App 引擎占用（healthOk 通过，如定时任务后台启动的）→ 直接复用，不换端口
+     *  - 被其他进程占用（Termux 残留等）→ 自动找空闲端口。 */
+    private void resolveEnginePort() {
+        try {
+            if (healthOk()) return; // 引擎已在默认端口运行（后台自动执行/保活）→ 复用
+            if (!portInUse(enginePort)) return; // 默认端口空闲，直接用
+            // 默认端口被非引擎服务占用：扫描 3081~3099 找空闲端口（通知端口 = enginePort+1 自动跟随）
+            for (int p = 3081; p <= 3099; p++) {
+                if (!portInUse(p)) {
+                    Log.w(TAG, "port " + enginePort + " in use, using " + p + " instead");
+                    enginePort = p;
+                    return;
+                }
+            }
+            Log.w(TAG, "all ports 3080-3099 in use, trying 3080 anyway");
+        } catch (Throwable t) {
+            Log.w(TAG, "resolveEnginePort error", t);
+        }
+    }
+
+    /** 检测端口是否被占用（尝试 connect，能连上即被占用）。 */
+    private boolean portInUse(int port) {
+        Socket s = null;
+        try {
+            s = new Socket();
+            s.connect(new InetSocketAddress("127.0.0.1", port), 300);
+            return true; // 能连上 = 有服务在监听
+        } catch (Throwable t) {
+            return false; // 连不上 = 空闲
+        } finally {
+            try { if (s != null) s.close(); } catch (Throwable ignored) {}
+        }
     }
 
     // ============ 前台保活服务 ============
@@ -915,18 +1124,20 @@ public class MainActivity extends Activity {
     /** 通知渠道（App 内发通知用，与保活服务的渠道分开）。 */
     private static final String NOTIFY_CHANNEL_ID = "dsh_ai_notify";
     private static final String NOTIFY_CHANNEL_NAME = "AI 通知";
-    private static final int AI_NOTIFY_PORT = 3081; // 与 3080 引擎端口相邻，避免冲突
+    // 通知端口动态跟随引擎端口（enginePort+1），保证两个 App 共存时不冲突
+    private int notifyPort() { return enginePort + 1; }
 
-    /** 启动本地通知监听：AI 通过插件请求 http://127.0.0.1:3081 发通知（仅需通知权限）。 */
+    /** 启动本地通知监听：AI 通过插件请求 http://127.0.0.1:<notifyPort> 发通知（仅需通知权限）。 */
     private void startNotifyServer() {
+        final int port = notifyPort();
         new Thread(new Runnable() {
             @Override public void run() {
                 ServerSocket ss = null;
                 try {
                     ss = new ServerSocket();
                     ss.setReuseAddress(true);
-                    ss.bind(new InetSocketAddress("127.0.0.1", AI_NOTIFY_PORT));
-                    Log.i(TAG, "notify server listening on " + AI_NOTIFY_PORT);
+                    ss.bind(new InetSocketAddress("127.0.0.1", port));
+                    Log.i(TAG, "notify server listening on " + port);
                     while (!Thread.currentThread().isInterrupted()) {
                         final Socket s = ss.accept();
                         handleNotifyConnection(s);
@@ -940,14 +1151,14 @@ public class MainActivity extends Activity {
         }, "notify-server").start();
     }
 
-    /** 处理一条通知请求：读 HTTP 请求头 + JSON 正文 {title, text}，调 NotificationManager 发通知。 */
+    /** 处理一条本地请求：按 HTTP 路径分发（/notify 通知、/setting 系统设置、/clipboard 剪贴板）。 */
     private void handleNotifyConnection(final Socket s) {
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
                     s.setSoTimeout(5000);
                     InputStream in = s.getInputStream();
-                    // 1) 读请求头直到空行，同时解析 Content-Length
+                    // 1) 读请求行 + 请求头，解析路径和 Content-Length
                     int contentLength = 0;
                     StringBuilder head = new StringBuilder();
                     int c;
@@ -957,6 +1168,13 @@ public class MainActivity extends Activity {
                         if (head.length() > 8192) break; // 防异常大头部
                     }
                     String h = head.toString();
+                    // 请求行形如: POST /notify HTTP/1.1
+                    String path = "/notify";
+                    int sp1 = h.indexOf(' ');
+                    int sp2 = sp1 >= 0 ? h.indexOf(' ', sp1 + 1) : -1;
+                    if (sp1 >= 0 && sp2 > sp1) path = h.substring(sp1 + 1, sp2);
+                    int qIdx = path.indexOf('?');
+                    if (qIdx >= 0) path = path.substring(0, qIdx);
                     int clIdx = h.toLowerCase().indexOf("content-length:");
                     if (clIdx >= 0) {
                         int eol = h.indexOf('\r', clIdx);
@@ -978,49 +1196,305 @@ public class MainActivity extends Activity {
                         }
                         body.append(new String(buf, 0, off, "UTF-8"));
                     } else {
-                        // 没有 Content-Length：读到连接关闭（兜底）
                         byte[] tmp = new byte[2048];
                         int n;
                         while ((n = in.read(tmp)) != -1) body.append(new String(tmp, 0, n, "UTF-8"));
                     }
-                    // 3) 兼容 JSON 和 query 两种格式：{"title":"..","text":".."} 或 title=..&text=..
-                    String raw = body.toString();
-                    String title = "", text = "";
-                    int ti = raw.indexOf("\"title\"");
-                    int tx = raw.indexOf("\"text\"");
-                    if (ti >= 0 || tx >= 0) {
-                        title = jsonField(raw, "title");
-                        text = jsonField(raw, "text");
+                    // 3) 分发处理
+                    String respBody;
+                    if (path.startsWith("/setting")) {
+                        respBody = handleSettingRequest(body.toString());
+                    } else if (path.startsWith("/clipboard")) {
+                        respBody = handleClipboardRequest(body.toString());
+                    } else if (path.startsWith("/schedule")) {
+                        respBody = handleScheduleRequest(body.toString());
                     } else {
-                        title = queryField(raw, "title");
-                        text = queryField(raw, "text");
+                        respBody = handleNotifyRequest(body.toString());
                     }
-                    if (title.isEmpty()) title = "DeepSeek Harness";
-                    if (text.isEmpty()) text = "(空消息)";
-
-                    boolean granted = checkSelfPermission("android.permission.POST_NOTIFICATIONS")
-                            == PackageManager.PERMISSION_GRANTED;
-                    final boolean ok;
-                    if (granted) {
-                        postNotification(title, text);
-                        ok = true;
-                    } else {
-                        ok = false;
-                    }
-                    final String respBody = ok
-                            ? "{\"ok\":true}"
-                            : "{\"ok\":false,\"error\":\"通知权限未授予，无法发送通知\"}";
                     BufferedWriter w = new BufferedWriter(new OutputStreamWriter(s.getOutputStream(), "UTF-8"));
                     w.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
                             + respBody.getBytes("UTF-8").length + "\r\nConnection: close\r\n\r\n" + respBody);
                     w.flush();
                     s.close();
                 } catch (Throwable t) {
-                    Log.w(TAG, "notify connection error", t);
+                    Log.w(TAG, "local server connection error", t);
                     try { s.close(); } catch (Throwable ignored) {}
                 }
             }
-        }, "notify-conn").start();
+        }, "local-conn").start();
+    }
+
+    /** 处理 /notify：发系统通知（仅需通知权限）。 */
+    private String handleNotifyRequest(String raw) {
+        String title = "", text = "";
+        int ti = raw.indexOf("\"title\"");
+        int tx = raw.indexOf("\"text\"");
+        if (ti >= 0 || tx >= 0) {
+            title = jsonField(raw, "title");
+            text = jsonField(raw, "text");
+        } else {
+            title = queryField(raw, "title");
+            text = queryField(raw, "text");
+        }
+        if (title.isEmpty()) title = "DeepSeek Harness";
+        if (text.isEmpty()) text = "(空消息)";
+        boolean granted = checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                == PackageManager.PERMISSION_GRANTED;
+        if (granted) {
+            postNotification(title, text);
+            return "{\"ok\":true}";
+        }
+        return "{\"ok\":false,\"error\":\"通知权限未授予，无法发送通知\"}";
+    }
+
+    /** 处理 /setting：改系统设置（⑤，走 App 的 WRITE_SETTINGS 权限，仅限 System 命名空间，免 Shizuku）。
+     *  音量类 key 必须走 AudioManager.setStreamVolume（Settings.System 的记录不生效）；
+     *  其余 System 项走 Settings.System.put。 */
+    private String handleSettingRequest(String raw) {
+        try {
+            String key = jsonField(raw, "key");
+            String value = jsonField(raw, "value");
+            if (key.isEmpty()) {
+                key = queryField(raw, "key");
+                value = queryField(raw, "value");
+            }
+            if (key.isEmpty()) return "{\"ok\":false,\"error\":\"缺少 key 参数\"}";
+            // 音量：走 AudioManager（真实生效，无需 WRITE_SETTINGS）
+            if (key.startsWith("volume_")) {
+                return handleVolumeRequest(key, value);
+            }
+            // 其余 System 设置：需要 WRITE_SETTINGS 权限
+            if (Build.VERSION.SDK_INT < 23 || !Settings.System.canWrite(this)) {
+                return "{\"ok\":false,\"error\":\"未授予「修改系统设置」权限（WRITE_SETTINGS），无法修改；请先在权限引导页/系统设置里开启\"}";
+            }
+            boolean ok;
+            if (isNumeric(value)) {
+                ok = Settings.System.putInt(getContentResolver(), key, Integer.parseInt(value));
+            } else {
+                ok = Settings.System.putString(getContentResolver(), key, value);
+            }
+            return ok ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"写入失败（key 可能不存在或不允许修改）\"}";
+        } catch (Throwable t) {
+            return "{\"ok\":false,\"error\":\"" + String.valueOf(t.getMessage()).replace("\"", "'") + "\"}";
+        }
+    }
+
+    /** 音量调节：走 AudioManager.setStreamVolume（真实改变音量）。 */
+    private String handleVolumeRequest(String key, String value) {
+        try {
+            android.media.AudioManager am = (android.media.AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am == null) return "{\"ok\":false,\"error\":\"音频服务不可用\"}";
+            int stream;
+            switch (key) {
+                case "volume_music": stream = android.media.AudioManager.STREAM_MUSIC; break;
+                case "volume_ring": stream = android.media.AudioManager.STREAM_RING; break;
+                case "volume_alarm": stream = android.media.AudioManager.STREAM_ALARM; break;
+                case "volume_notification": stream = android.media.AudioManager.STREAM_NOTIFICATION; break;
+                case "volume_system": stream = android.media.AudioManager.STREAM_SYSTEM; break;
+                case "volume_voice_call": stream = android.media.AudioManager.STREAM_VOICE_CALL; break;
+                default: return "{\"ok\":false,\"error\":\"不支持的音量类型: " + key + "\"}";
+            }
+            int max = am.getStreamMaxVolume(stream);
+            int val;
+            if (value.endsWith("%")) {
+                // 支持百分比：如 "50%"
+                val = (int) Math.round(max * Integer.parseInt(value.replace("%", "").trim()) / 100.0);
+            } else {
+                val = Integer.parseInt(value.trim());
+            }
+            if (val < 0) val = 0;
+            if (val > max) val = max;
+            // flags=0：不显示音量条、不播放提示音（静默调整，避免打扰）
+            am.setStreamVolume(stream, val, 0);
+            return "{\"ok\":true,\"stream\":\"" + key + "\",\"level\":" + val + ",\"max\":" + max + "}";
+        } catch (Throwable t) {
+            return "{\"ok\":false,\"error\":\"" + String.valueOf(t.getMessage()).replace("\"", "'") + "\"}";
+        }
+    }
+
+    /** 处理 /clipboard：读写剪贴板（⑦，无需任何特殊权限）。 */
+    private String handleClipboardRequest(String raw) {
+        try {
+            String action = jsonField(raw, "action");
+            if (action.isEmpty()) action = queryField(raw, "action");
+            if (action.isEmpty()) action = "read";
+            if (action.equals("write")) {
+                String content = jsonField(raw, "content");
+                if (content.isEmpty()) content = queryField(raw, "content");
+                if (content.isEmpty()) return "{\"ok\":false,\"error\":\"缺少 content 参数\"}";
+                android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("dsh", content));
+                return "{\"ok\":true}";
+            }
+            // read
+            android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm == null || !cm.hasPrimaryClip()) return "{\"ok\":true,\"content\":\"\"}";
+            CharSequence cs = cm.getPrimaryClip().getItemAt(0).coerceToText(this);
+            String content = cs == null ? "" : cs.toString();
+            // JSON 转义
+            content = content.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
+            return "{\"ok\":true,\"content\":\"" + content + "\"}";
+        } catch (Throwable t) {
+            return "{\"ok\":false,\"error\":\"" + String.valueOf(t.getMessage()).replace("\"", "'") + "\"}";
+        }
+    }
+
+    private boolean isNumeric(String s) {
+        if (s == null || s.isEmpty()) return false;
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch < '0' || ch > '9') return false;
+        }
+        return true;
+    }
+
+    // ============ ⑥ 定时任务（半自动版）============
+    /** 处理 /schedule：AI 设置定时提醒 → AlarmManager 注册系统闹钟。
+     *  到点系统唤醒 AlarmReceiver（即使 App 被杀也能触发）→ 推送通知提醒。
+     *  若 App 仍在后台（保活生效），点通知可回 App 继续执行。 */
+    private String handleScheduleRequest(String raw) {
+        try {
+            String text = jsonField(raw, "text");
+            if (text.isEmpty()) text = queryField(raw, "text");
+            String when = jsonField(raw, "when");
+            if (when.isEmpty()) when = queryField(raw, "when");
+            if (text.isEmpty()) return "{\"ok\":false,\"error\":\"缺少 text 参数\"}";
+            if (when.isEmpty()) return "{\"ok\":false,\"error\":\"缺少 when 参数（ISO 时间或相对秒数）\"}";
+
+            long triggerAt;
+            // 支持两种格式：纯数字 = 相对秒数；否则按 ISO 时间解析
+            if (isNumeric(when)) {
+                triggerAt = System.currentTimeMillis() + Long.parseLong(when) * 1000L;
+            } else {
+                // 兼容 "2026-08-21 08:00:00" / "2026-08-21T08:00:00" / "08:00"（今天）
+                String w = when.trim().replace("T", " ").replace("Z", "");
+                java.text.SimpleDateFormat fmt;
+                long at;
+                if (w.length() <= 5) {
+                    fmt = new java.text.SimpleDateFormat("HH:mm", Locale.US);
+                    java.util.Date d = fmt.parse(w);
+                    java.util.Calendar cal = java.util.Calendar.getInstance();
+                    cal.set(java.util.Calendar.HOUR_OF_DAY, d.getHours());
+                    cal.set(java.util.Calendar.MINUTE, d.getMinutes());
+                    cal.set(java.util.Calendar.SECOND, 0);
+                    at = cal.getTimeInMillis();
+                    if (at <= System.currentTimeMillis()) at += 24 * 3600 * 1000L; // 已过 → 明天
+                } else if (w.length() <= 16) {
+                    fmt = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US);
+                    at = fmt.parse(w).getTime();
+                } else {
+                    fmt = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
+                    at = fmt.parse(w).getTime();
+                }
+                triggerAt = at;
+            }
+            if (triggerAt <= System.currentTimeMillis()) {
+                return "{\"ok\":false,\"error\":\"触发时间已过，请设置未来的时间\"}";
+            }
+
+            android.app.AlarmManager am = (android.app.AlarmManager) getSystemService(Context.ALARM_SERVICE);
+            // 存任务到文件（AlarmReceiver 到点时读取并自动执行）
+            String taskId = "task-" + System.currentTimeMillis();
+            saveScheduledTask(taskId, text, triggerAt);
+            Intent i = new Intent(this, AlarmReceiver.class);
+            i.putExtra("task", text);
+            i.putExtra("taskId", taskId);
+            android.app.PendingIntent pi = android.app.PendingIntent.getBroadcast(this, 0, i,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
+            // 用 setAlarmClock（系统最高优先级闹钟，无需特殊权限、Doze 也触发）最可靠；
+            // 失败则降级 setExactAndAllowWhileIdle / set
+            try {
+                if (Build.VERSION.SDK_INT >= 21) {
+                    Intent show = new Intent(this, MainActivity.class);
+                    show.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                    android.app.PendingIntent showPi = android.app.PendingIntent.getActivity(this, 1, show,
+                            android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
+                    am.setAlarmClock(new android.app.AlarmManager.AlarmClockInfo(triggerAt, showPi), pi);
+                } else {
+                    am.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerAt, pi);
+                }
+            } catch (Throwable t) {
+                try {
+                    if (Build.VERSION.SDK_INT >= 23) {
+                        am.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAt, pi);
+                    } else {
+                        am.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerAt, pi);
+                    }
+                } catch (Throwable t2) {
+                    am.set(android.app.AlarmManager.RTC_WAKEUP, triggerAt, pi);
+                }
+            }
+            long secs = (triggerAt - System.currentTimeMillis()) / 1000;
+            String whenStr = secs >= 3600
+                    ? (secs / 3600) + "小时" + ((secs % 3600) / 60) + "分钟后"
+                    : (secs / 60) + "分钟后";
+            return "{\"ok\":true,\"at\":\"" + whenStr + "\",\"hint\":\"到点会自动拉起引擎执行任务（无需操作），完成后推送通知；若 App 被杀，闹钟仍会触发并自动启动\"}";
+        } catch (Throwable t) {
+            return "{\"ok\":false,\"error\":\"" + String.valueOf(t.getMessage()).replace("\"", "'") + "\"}";
+        }
+    }
+
+    // ============ 定时任务持久化 ============
+    /** 任务文件：内部私有目录（AlarmReceiver 与 MainActivity 都能读） */
+    private File scheduledTasksFile() { return new File(getFilesDir(), "scheduled-tasks.json"); }
+    /** 执行记录日志：任务到点/执行/通知都追加，防止丢失 */
+    private File scheduledLogFile() { return new File(getFilesDir(), "scheduled-log.txt"); }
+
+    /** 保存一条定时任务到文件（jsonl 格式：taskId|triggerAt|text）。 */
+    private void saveScheduledTask(String taskId, String text, long triggerAt) {
+        try {
+            File f = scheduledTasksFile();
+            String line = taskId + "|" + triggerAt + "|" + text.replace("|", " ").replace("\n", " ") + "\n";
+            FileOutputStream fos = new FileOutputStream(f, true);
+            fos.write(line.getBytes("UTF-8"));
+            fos.close();
+            logSchedule("任务已设置: " + text + " @ " + new java.text.SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(new Date(triggerAt)));
+        } catch (Throwable t) {
+            Log.w(TAG, "saveScheduledTask error", t);
+        }
+    }
+
+    /** 读取所有已到点的任务（triggerAt <= now），并从未到点列表中删除它们（标记已处理）。 */
+    private List<String[]> takeDueScheduledTasks() {
+        List<String[]> due = new ArrayList<>();
+        try {
+            File f = scheduledTasksFile();
+            if (!f.exists()) return due;
+            long now = System.currentTimeMillis();
+            StringBuilder keep = new StringBuilder();
+            BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(f), "UTF-8"));
+            String line;
+            while ((line = r.readLine()) != null) {
+                if (line.trim().isEmpty()) continue;
+                String[] parts = line.split("\\|", 3);
+                if (parts.length < 3) continue;
+                try {
+                    long at = Long.parseLong(parts[1]);
+                    if (at <= now) {
+                        due.add(parts); // 到点：取走
+                    } else {
+                        keep.append(line).append("\n"); // 未到点：保留
+                    }
+                } catch (Exception ignored) {}
+            }
+            r.close();
+            FileOutputStream fos = new FileOutputStream(f, false);
+            fos.write(keep.toString().getBytes("UTF-8"));
+            fos.close();
+        } catch (Throwable t) {
+            Log.w(TAG, "takeDueScheduledTasks error", t);
+        }
+        return due;
+    }
+
+    /** 追加一条执行记录日志（防丢失）。 */
+    private void logSchedule(String msg) {
+        try {
+            FileOutputStream fos = new FileOutputStream(scheduledLogFile(), true);
+            String line = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()) + " " + msg + "\n";
+            fos.write(line.getBytes("UTF-8"));
+            fos.close();
+        } catch (Throwable ignored) {}
     }
 
     /** 从 JSON 里取字符串字段值（简易解析，不引第三方库）。 */
@@ -1365,7 +1839,7 @@ public class MainActivity extends Activity {
         // 无需 --patch 参数（重复传入会导致 duplicate loader entry 崩溃）。
         ProcessBuilder pb = new ProcessBuilder(
                 node.getAbsolutePath(), "--expose-internals", binjs.getAbsolutePath(),
-                "web", "--host", "127.0.0.1", "--port", "3080");
+                "web", "--host", "127.0.0.1", "--port", String.valueOf(enginePort));
         java.util.Map<String, String> env = pb.environment();
         env.put("LD_LIBRARY_PATH", lib.getAbsolutePath());
         env.put("PATH", bin.getAbsolutePath() + ":" +
@@ -1380,7 +1854,7 @@ public class MainActivity extends Activity {
         // AI 不会反复尝试系统操作；文件读写仍可用 DSH 自带的 fs/bash 工具（只需存储权限）。
         env.put("SHIZUKU_AVAILABLE", shizukuAvailable() ? "1" : "0");
         env.put("ROOT_AVAILABLE", rootAvailable() ? "1" : "0");
-        env.put("APP_NOTIFY_PORT", String.valueOf(AI_NOTIFY_PORT));
+        env.put("APP_NOTIFY_PORT", String.valueOf(notifyPort()));
         pb.redirectErrorStream(true);
 
         final Process proc = pb.start();
@@ -1415,7 +1889,7 @@ public class MainActivity extends Activity {
     private boolean healthOk() {
         HttpURLConnection c = null;
         try {
-            c = (HttpURLConnection) new URL(URL_HOME + "/").openConnection();
+            c = (HttpURLConnection) new URL(homeUrl() + "/").openConnection();
             c.setConnectTimeout(1200);
             c.setReadTimeout(1200);
             int code = c.getResponseCode();
@@ -1431,13 +1905,98 @@ public class MainActivity extends Activity {
         long start = System.currentTimeMillis();
         long deadline = start + 90000;
         while (System.currentTimeMillis() < deadline) {
-            if (healthOk()) { loadHome(); return; }
+            if (healthOk()) { loadHome(); executePendingScheduledTask(); return; }
             long waited = (System.currentTimeMillis() - start) / 1000;
             setStatus("正在启动 DeepSeek Harness…（已等待 " + waited + " 秒）");
             try { Thread.sleep(1000); } catch (InterruptedException e) { return; }
         }
         setStatus("引擎启动超时，请重启应用");
         loadHome();
+    }
+
+    /** 定时任务自动执行：闹钟到点后引擎就绪，把任务文本作为消息自动发送给 AI（无需用户操作）。 */
+    private void executePendingScheduledTask() {
+        final String task = pendingScheduledTask;
+        pendingScheduledTask = null; // 只执行一次
+        if (task == null || task.isEmpty()) return;
+        logSchedule("开始自动执行任务: " + task);
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    // 等引擎完全就绪（HTTP 200 后 API 可能还需一点时间）
+                    for (int i = 0; i < 20; i++) {
+                        if (healthOk()) break;
+                        Thread.sleep(1000);
+                    }
+                    // 调 DSH API：建会话 + 发消息（AI 自动执行任务）
+                    String sessionId = createSession();
+                    if (sessionId == null) {
+                        logSchedule("自动执行失败：无法创建会话（引擎未就绪或无 API Key？）");
+                        return;
+                    }
+                    boolean sent = sendPrompt(sessionId, task);
+                    logSchedule(sent ? "任务已发送给 AI 执行: " + task : "任务发送失败: " + task);
+                } catch (Throwable t) {
+                    logSchedule("自动执行异常: " + t.getMessage());
+                }
+            }
+        }, "scheduled-exec").start();
+    }
+
+    /** 调 DSH API 创建会话，返回 sessionId（失败返回 null）。 */
+    private String createSession() {
+        String json = rpcCall("session.create", "{}");
+        if (json == null) return null;
+        int i = json.indexOf("\"sessionId\":\"");
+        if (i >= 0) {
+            int q1 = i + "\"sessionId\":\"".length();
+            int q2 = json.indexOf('"', q1);
+            if (q2 > q1) return json.substring(q1, q2);
+        }
+        return null;
+    }
+
+    /** 调 DSH API 发送消息（AI 开始执行任务）。 */
+    private boolean sendPrompt(String sessionId, String text) {
+        String payload = "{\"sessionId\":\"" + sessionId + "\",\"mode\":\"queue\",\"content\":[{\"type\":\"text\",\"text\":\"" + escapeJson(text) + "\"}]}";
+        String json = rpcCall("session.prompt", payload);
+        return json != null && json.contains("\"ok\":true");
+    }
+
+    /** DSH RPC 调用：标准协议 {"type":"client-request","rpcId":"...","method":"...","payload":{...}} */
+    private String rpcCall(String method, String payloadJson) {
+        try {
+            URL url = new URL(homeUrl() + "/api/" + method);
+            HttpURLConnection c = (HttpURLConnection) url.openConnection();
+            c.setRequestMethod("POST");
+            c.setRequestProperty("Content-Type", "application/json");
+            c.setDoOutput(true);
+            c.setConnectTimeout(3000);
+            c.setReadTimeout(5000);
+            String rpcId = "sched-" + System.currentTimeMillis();
+            String body = "{\"type\":\"client-request\",\"rpcId\":\"" + rpcId + "\",\"method\":\"" + method
+                    + "\",\"payload\":" + (payloadJson == null || payloadJson.isEmpty() ? "{}" : payloadJson) + "}";
+            c.getOutputStream().write(body.getBytes("UTF-8"));
+            int code = c.getResponseCode();
+            if (code >= 200 && code < 300) {
+                InputStream in = c.getInputStream();
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                byte[] b = new byte[4096];
+                int n;
+                while ((n = in.read(b)) > 0) out.write(b, 0, n);
+                in.close();
+                c.disconnect();
+                return new String(out.toByteArray(), "UTF-8");
+            }
+            c.disconnect();
+        } catch (Throwable t) {
+            Log.w(TAG, "rpc " + method + " error", t);
+        }
+        return null;
+    }
+
+    private String escapeJson(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
     }
 
     /** node 看门狗：node 进程死亡且服务不可用时自动重启引擎并刷新页面 */
@@ -1460,7 +2019,7 @@ public class MainActivity extends Activity {
                             spawnNode(new File(getFilesDir(), "payload"));
                             final WebView wv = webView;
                             ui.post(new Runnable() {
-                                @Override public void run() { wv.loadUrl(URL_HOME); }
+                                @Override public void run() { wv.loadUrl(homeUrl()); }
                             });
                         }
                     } catch (Throwable t) {
@@ -1482,7 +2041,7 @@ public class MainActivity extends Activity {
                     progressBar.setIndeterminate(false);
                     progressBar.setVisibility(View.GONE);
                 }
-                webView.loadUrl(URL_HOME);
+                webView.loadUrl(homeUrl());
             }
         });
     }
