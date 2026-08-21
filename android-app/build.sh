@@ -13,6 +13,14 @@ AJ="${ANDROID_JAR:-$P/sdk/android.jar}"
 # javac 所在目录：优先 JAVA_BIN，否则从 DSH_DEV_HOME 推导（devhome 与 usr 同在 buildenv 下）
 JAVA="${JAVA_BIN:-$H/../usr/lib/jvm/java-17-openjdk/bin}"
 [ -x "$JAVA/javac" ] || { echo "!! 找不到 javac：$JAVA/javac（请 export JAVA_BIN=.../java-17-openjdk/bin）"; exit 1; }
+# classpath 分隔符：Windows(Git Bash) 用 ';'，POSIX/Android 用 ':'（Windows 的 Java 程序不认 ':' 分隔）
+# Windows 上 d8/apksigner 是 .bat（bash 不会自动补 .bat 后缀，显式指定）
+CP_SEP=":"
+D8="d8"
+APKSIGNER="apksigner"
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*) CP_SEP=";"; D8="d8.bat"; APKSIGNER="apksigner.bat" ;;
+esac
 # 签名密钥（自行准备，不入仓库）
 KEY="$P/release.jks"
 
@@ -125,13 +133,19 @@ rm -rf "$SHIZUKU_CLS"; mkdir -p "$SHIZUKU_CLS"
 for AAR in "$P/libs/shizuku-api.aar" "$P/libs/shizuku-provider.aar" "$P/libs/shizuku-aidl.aar"; do
   TMP="$P/out/$(basename "$AAR" .aar)"
   rm -rf "$TMP"; mkdir -p "$TMP"
-  ( cd "$TMP" && $JAVA_HOME/bin/jar xf "$AAR" classes.jar )
-  ( cd "$SHIZUKU_CLS" && $JAVA_HOME/bin/jar xf "$TMP/classes.jar" )
+  ( cd "$TMP" && "$JAVA/jar" xf "$AAR" classes.jar )
+  ( cd "$SHIZUKU_CLS" && "$JAVA/jar" xf "$TMP/classes.jar" )
 done
-SHIZUKU_JARS="$P/out/shizuku-api/classes.jar:$P/out/shizuku-provider/classes.jar:$P/out/shizuku-aidl/classes.jar"
+SHIZUKU_JARS="$P/out/shizuku-api/classes.jar${CP_SEP}$P/out/shizuku-provider/classes.jar${CP_SEP}$P/out/shizuku-aidl/classes.jar"
+# Windows(Git Bash)：MSYS 不转换"分号分隔的 POSIX 路径列表"，javac 会整体当一条路径找不到 → 用 cygpath 转 Windows 路径
+GEN_CP="$P/out/gen"
+if [ "$CP_SEP" = ";" ] && command -v cygpath >/dev/null 2>&1; then
+  GEN_CP="$(cygpath -w "$P/out/gen")"
+  SHIZUKU_JARS="$(cygpath -w "$P/out/shizuku-api/classes.jar")${CP_SEP}$(cygpath -w "$P/out/shizuku-provider/classes.jar")${CP_SEP}$(cygpath -w "$P/out/shizuku-aidl/classes.jar")"
+fi
 # javac 必须成功：失败立即中止（曾因 javac 找不到而产出无 MainActivity 的坏 APK，安装即闪退）
 if ! "$JAVA/javac" -source 1.8 -target 1.8 -bootclasspath "$AJ" \
-  -classpath "$P/out/gen:$SHIZUKU_JARS" -d "$P/out/classes" \
+  -classpath "$GEN_CP${CP_SEP}$SHIZUKU_JARS" -d "$P/out/classes" \
   "$P/src/com/deepseek/harness/MainActivity.java" "$P/src/com/deepseek/harness/EngineService.java" "$P/src/com/deepseek/harness/AlarmReceiver.java" "$P/src/com/deepseek/harness/ScheduleExecutor.java" "$P/out/gen/com/deepseek/harness/R.java" \
   >"$P/out/javac.log" 2>&1; then
   echo "!! javac 编译失败，日志：$P/out/javac.log"
@@ -144,8 +158,14 @@ echo "  javac 完成，class 数：$NCLASS"
 [ "$NCLASS" -gt 0 ] || { echo "!! javac 产物为空，中止构建"; exit 1; }
 
 echo "== 3/7 d8 -> dex =="
-d8 --release --lib "$AJ" --min-api 24 --output "$P/out/dex" \
-  $(find "$P/out/classes" -name '*.class') $(find "$SHIZUKU_CLS" -name '*.class') \
+# class 列表写入 response file（Windows 命令行 8191 字符限制，98+ 个绝对路径会超长）
+CLS_RSP="$P/out/classes.rsp"
+if [ "$CP_SEP" = ";" ] && command -v cygpath >/dev/null 2>&1; then
+  { find "$P/out/classes" -name '*.class'; find "$SHIZUKU_CLS" -name '*.class'; } | cygpath -w -f - > "$CLS_RSP"
+else
+  { find "$P/out/classes" -name '*.class'; find "$SHIZUKU_CLS" -name '*.class'; } > "$CLS_RSP"
+fi
+"$D8" --release --lib "$AJ" --min-api 24 --output "$P/out/dex" @"$CLS_RSP" \
   || { echo "!! d8 失败"; exit 1; }
 # 校验 dex 必须包含 MainActivity（防止再次产出安装即闪退的坏包）
 if ! grep -aq "MainActivity" "$P/out/dex/classes.dex"; then
@@ -162,11 +182,11 @@ zipalign -f 4 "$P/out/unsigned.apk" "$P/out/aligned.apk"
 
 echo "== 6/7 签名 =="
 [ -f "$KEY" ] || { echo "!! 缺少签名密钥 $KEY（release.jks 不入仓库，请自行准备）"; exit 1; }
-apksigner sign --ks "$KEY" --ks-pass "pass:${KEYSTORE_PASS:?请先 export KEYSTORE_PASS=签名密码}" --ks-key-alias "${KEYSTORE_ALIAS:-dsh}" --key-pass "pass:$KEYSTORE_PASS" \
+"$APKSIGNER" sign --ks "$KEY" --ks-pass "pass:${KEYSTORE_PASS:?请先 export KEYSTORE_PASS=签名密码}" --ks-key-alias "${KEYSTORE_ALIAS:-dsh}" --key-pass "pass:$KEYSTORE_PASS" \
   --out "$P/DeepSeekHarness.apk" "$P/out/aligned.apk"
 
 echo "== 7/7 校验 =="
-apksigner verify --print-certs "$P/DeepSeekHarness.apk"
+"$APKSIGNER" verify --print-certs "$P/DeepSeekHarness.apk"
 aapt dump badging "$P/DeepSeekHarness.apk" | head -8
 ls -la "$P/DeepSeekHarness.apk"
 echo "BUILD OK -> $P/DeepSeekHarness.apk"

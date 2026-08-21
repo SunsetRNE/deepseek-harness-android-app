@@ -25,16 +25,26 @@ import java.util.Locale;
 public final class ScheduleExecutor {
     private static final String TAG = "ScheduleExecutor";
     private static final String REL_BINJS = "lib/node_modules/@deepseek-ai/dsh/lib/bin.js";
-    private static final int ENGINE_PORT = 3080;
+    private static final String PREFS = "dsh_setup";
 
     private ScheduleExecutor() {}
+
+    /** 引擎端口：与 MainActivity 保持一致（它换端口后会持久化到 SharedPreferences）。
+     *  修复 v1.5.1：原来硬编码 3080，主引擎换端口后定时任务仍连 3080 → 连到占位服务/失败。 */
+    private static int enginePort(Context ctx) {
+        try {
+            int saved = ctx.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).getInt("engine_port", 0);
+            if (saved >= 3080 && saved <= 3099) return saved;
+        } catch (Throwable ignored) {}
+        return 3080; // 默认（与 MainActivity 一致）
+    }
 
     /** 执行一条定时任务（后台线程，调用方勿阻塞主线程）。 */
     public static void execute(Context ctx, String task) {
         if (task == null || task.isEmpty()) return;
         log(ctx, "开始执行任务: " + task);
         try {
-            if (!engineReady()) {
+            if (!engineReady(ctx)) {
                 log(ctx, "引擎未运行，尝试启动…");
                 if (!startEngine(ctx)) {
                     log(ctx, "引擎启动失败，无法自动执行任务");
@@ -43,19 +53,19 @@ public final class ScheduleExecutor {
             }
             // 等引擎完全就绪
             for (int i = 0; i < 30; i++) {
-                if (engineReady()) break;
+                if (engineReady(ctx)) break;
                 Thread.sleep(1000);
             }
-            if (!engineReady()) {
+            if (!engineReady(ctx)) {
                 log(ctx, "引擎 30 秒未就绪，放弃");
                 return;
             }
-            String sessionId = createSession();
+            String sessionId = createSession(ctx);
             if (sessionId == null) {
                 log(ctx, "创建会话失败（可能未配置 API Key）");
                 return;
             }
-            String promptResp = sendPromptRaw(sessionId, task);
+            String promptResp = sendPromptRaw(ctx, sessionId, task);
             log(ctx, promptResp == null
                     ? "任务发送失败（无响应）: " + task
                     : (promptResp.contains("\"ok\":true")
@@ -66,15 +76,22 @@ public final class ScheduleExecutor {
         }
     }
 
-    /** 引擎是否已在 3080 响应。 */
-    private static boolean engineReady() {
+    /** 引擎是否已在目标端口响应，且确认是 DSH 引擎（首页含 <title>DeepSeek Harness</title>）。
+     *  修复 v1.5.1：原来任意 HTTP 200-499 都算就绪，占位服务会被误判为"引擎就绪"。 */
+    private static boolean engineReady(Context ctx) {
         HttpURLConnection c = null;
         try {
-            c = (HttpURLConnection) new URL("http://127.0.0.1:" + ENGINE_PORT + "/").openConnection();
+            c = (HttpURLConnection) new URL("http://127.0.0.1:" + enginePort(ctx) + "/").openConnection();
             c.setConnectTimeout(1500);
             c.setReadTimeout(1500);
             int code = c.getResponseCode();
-            return code >= 200 && code < 500;
+            if (code < 200 || code >= 500) return false;
+            InputStream in = c.getInputStream();
+            byte[] buf = new byte[4096];
+            int n = in.read(buf);
+            try { in.close(); } catch (Throwable ignored) {}
+            if (n <= 0) return false;
+            return new String(buf, 0, n, "UTF-8").contains("<title>DeepSeek Harness</title>");
         } catch (Throwable t) {
             return false;
         } finally {
@@ -82,14 +99,19 @@ public final class ScheduleExecutor {
         }
     }
 
-    /** 启动 node 引擎（同 MainActivity.spawnNode 的环境变量；payload 必须已解压）。 */
+    /** 启动 node 引擎（同 MainActivity.spawnNode 的环境变量；payload 必须已解压）。
+     *  端口 = enginePort(ctx)，与主引擎换端口后保持一致。 */
     private static boolean startEngine(Context ctx) {
         try {
             File payload = new File(ctx.getFilesDir(), "payload");
             File node = new File(payload, "runtime/bin/node");
-            // dshroot：外部优先（/sdcard/DeepSeekHarness 或 Lite），否则内部
+            // dshroot：本包外部目录优先（正式版 DeepSeekHarness / Lite DeepSeekHarnessLite），
+            // 再回退另一版本目录，最后内部 fallback（修复 v1.5.1：原顺序 Lite 恒优先，正式版会错用 Lite 的 dshroot）
+            String selfRoot = ctx.getPackageName().contains(".beta")
+                    ? "DeepSeekHarnessLite" : "DeepSeekHarness";
+            String otherRoot = selfRoot.equals("DeepSeekHarnessLite") ? "DeepSeekHarness" : "DeepSeekHarnessLite";
             File dshroot = null;
-            for (String root : new String[]{"DeepSeekHarnessLite", "DeepSeekHarness"}) {
+            for (String root : new String[]{selfRoot, otherRoot}) {
                 File ext = new File(android.os.Environment.getExternalStorageDirectory(), root + "/dshroot");
                 if (new File(ext, REL_BINJS).exists()) { dshroot = ext; break; }
             }
@@ -109,7 +131,7 @@ public final class ScheduleExecutor {
 
             ProcessBuilder pb = new ProcessBuilder(
                     node.getAbsolutePath(), "--expose-internals", binjs.getAbsolutePath(),
-                    "web", "--host", "127.0.0.1", "--port", String.valueOf(ENGINE_PORT));
+                    "web", "--host", "127.0.0.1", "--port", String.valueOf(enginePort(ctx)));
             java.util.Map<String, String> env = pb.environment();
             env.put("LD_LIBRARY_PATH", lib.getAbsolutePath());
             env.put("PATH", bin.getAbsolutePath() + ":" +
@@ -121,7 +143,7 @@ public final class ScheduleExecutor {
             env.put("SHIZUKU_APP_ID", ctx.getPackageName());
             env.put("SHIZUKU_AVAILABLE", "0");
             env.put("ROOT_AVAILABLE", "0");
-            env.put("APP_NOTIFY_PORT", String.valueOf(ENGINE_PORT + 1));
+            env.put("APP_NOTIFY_PORT", String.valueOf(enginePort(ctx) + 1));
             pb.redirectErrorStream(true);
             Process proc = pb.start();
             // 日志写入 dsh-web.log
@@ -146,8 +168,8 @@ public final class ScheduleExecutor {
     }
 
     /** 调 DSH API 创建会话。 */
-    private static String createSession() {
-        String json = rpc("session.create", "{}");
+    private static String createSession(Context ctx) {
+        String json = rpc(ctx, "session.create", "{}");
         if (json == null) return null;
         // 解析 result.value.sessionId 或 result.sessionId
         int i = json.indexOf("\"sessionId\":\"");
@@ -160,22 +182,22 @@ public final class ScheduleExecutor {
     }
 
     /** 调 DSH API 发送消息。 */
-    private static boolean sendPrompt(String sessionId, String text) {
+    private static boolean sendPrompt(Context ctx, String sessionId, String text) {
         String payload = "{\"sessionId\":\"" + sessionId + "\",\"mode\":\"queue\",\"content\":[{\"type\":\"text\",\"text\":\"" + escapeJson(text) + "\"}]}";
-        String json = rpc("session.prompt", payload);
+        String json = rpc(ctx, "session.prompt", payload);
         return json != null && json.contains("\"ok\":true");
     }
 
     /** 调 DSH API 发送消息，返回完整响应（诊断用）。 */
-    private static String sendPromptRaw(String sessionId, String text) {
+    private static String sendPromptRaw(Context ctx, String sessionId, String text) {
         String payload = "{\"sessionId\":\"" + sessionId + "\",\"mode\":\"queue\",\"content\":[{\"type\":\"text\",\"text\":\"" + escapeJson(text) + "\"}]}";
-        return rpc("session.prompt", payload);
+        return rpc(ctx, "session.prompt", payload);
     }
 
     /** DSH RPC 调用：标准协议 {"type":"client-request","rpcId":"...","method":"...","payload":{...}} */
-    private static String rpc(String method, String payloadJson) {
+    private static String rpc(Context ctx, String method, String payloadJson) {
         try {
-            URL url = new URL("http://127.0.0.1:" + ENGINE_PORT + "/api/" + method);
+            URL url = new URL("http://127.0.0.1:" + enginePort(ctx) + "/api/" + method);
             HttpURLConnection c = (HttpURLConnection) url.openConnection();
             c.setRequestMethod("POST");
             c.setRequestProperty("Content-Type", "application/json");

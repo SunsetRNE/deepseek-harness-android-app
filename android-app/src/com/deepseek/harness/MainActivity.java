@@ -66,7 +66,8 @@ import rikka.shizuku.Shizuku;
 
 public class MainActivity extends Activity {
     private static final String TAG = "DeepSeekHarness";
-    // 引擎端口：默认 3080；若被占用（Termux 残留/其他进程）自动换空闲端口（①端口冲突处理）
+    // 引擎端口：默认 3080；若被占用（Termux 残留/其他进程）自动换空闲端口（①端口冲突处理）。
+    // 换端口后持久化到 SharedPreferences（engine_port），重启保持不漂移，ScheduleExecutor 复用同一端口。
     private int enginePort = 3080;
     private String homeUrl() { return "http://127.0.0.1:" + enginePort; }
     // bin.js 相对 dshroot 目录的路径（dshroot 可能位于外部公共目录或内部 fallback）
@@ -198,6 +199,9 @@ public class MainActivity extends Activity {
         }
 
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        // 恢复上次换过的引擎端口（持久化，避免每次启动端口漂移；无效则用默认 3080）
+        int savedPort = prefs.getInt("engine_port", 0);
+        if (savedPort >= 3080 && savedPort <= 3099) enginePort = savedPort;
         if (prefs.getBoolean("setup_done", false)) {
             // 定时任务自动执行：闹钟到点可能带着 scheduledTask extra 启动本 Activity
             Intent in = getIntent();
@@ -964,12 +968,18 @@ public class MainActivity extends Activity {
 
     // ============ 引擎启动（原逻辑）============
     private void startEngine() {
-        resolveEnginePort();       // ① 端口冲突处理：3080 被占用时自动换空闲端口
         startKeepAliveService();   // 前台保活：挂后台不被杀（引擎持续运行）
-        startNotifyServer();       // AI 发通知通道：本地 127.0.0.1:<notifyPort>，只需通知权限
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
+                    // ① 端口冲突处理 + 通知通道必须在后台线程：
+                    // resolveEnginePort 里的 isDshEngine/portInUse 是网络探测，
+                    // 主线程执行会抛 NetworkOnMainThreadException（被 catch 吞掉→误判端口空闲→不换端口→EADDRINUSE）。
+                    // v1.5.1 修复：v1.5.0 的"端口冲突 bug"真实根因就是主线程探测异常（文档描述不精确）。
+                    resolveEnginePort();
+                    // AI 发通知通道：在换端口之后再启动，端口 = enginePort+1 跟随正确
+                    startNotifyServer();
+
                     File files = getFilesDir();
                     File payload = new File(files, "payload");
                     File done = new File(payload, ".extracted");
@@ -1062,18 +1072,54 @@ public class MainActivity extends Activity {
     }
 
     // ============ ① 端口冲突处理 ============
-    /** 探测引擎端口是否被占用：
-     *  - 默认端口已被本 App 引擎占用（healthOk 通过，如定时任务后台启动的）→ 直接复用，不换端口
-     *  - 被其他进程占用（Termux 残留等）→ 自动找空闲端口。 */
+    /** 判断端口上是否真的是 DSH 引擎（而非任意 HTTP 服务/占位页）。
+     *  强特征：首页 HTML 含 <title>DeepSeek Harness</title>（占位服务/Termux busy 页不会恰好相同）。
+     *  v1.5.1 修复：旧 healthOk() 只认"任意 HTTP 响应(200-499)"，占位服务返回 200 时被误判为
+     *  引擎健康 → 不换端口、node 不启动、WebView 显示占位内容。 */
+    private boolean isDshEngine(int port) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL("http://127.0.0.1:" + port + "/").openConnection();
+            c.setConnectTimeout(1200);
+            c.setReadTimeout(1500);
+            c.setRequestProperty("User-Agent", "dsh-probe");
+            int code = c.getResponseCode();
+            if (code < 200 || code >= 500) return false;
+            InputStream in = c.getInputStream();
+            byte[] buf = new byte[4096];
+            int n = in.read(buf);
+            try { in.close(); } catch (Throwable ignored) {}
+            if (n <= 0) return false;
+            String body = new String(buf, 0, n, "UTF-8");
+            return body.contains("<title>DeepSeek Harness</title>");
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    /** 持久化引擎端口（换端口后保存；ScheduleExecutor 等复用同一端口，避免固定 3080 不一致）。 */
+    private void saveEnginePort(int port) {
+        try {
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt("engine_port", port).apply();
+        } catch (Throwable ignored) {}
+    }
+
+    /** 探测引擎端口：
+     *  - 默认端口已是本 App 引擎（isDshEngine 通过，如定时任务后台启动的）→ 直接复用，不换端口
+     *  - 默认端口空闲 → 直接用
+     *  - 默认端口被**非 DSH 服务**占用（Termux 残留/占位页等）→ 自动找空闲端口。 */
     private void resolveEnginePort() {
         try {
-            if (healthOk()) return; // 引擎已在默认端口运行（后台自动执行/保活）→ 复用
+            if (isDshEngine(enginePort)) return; // 真引擎已在跑（后台自动执行/保活）→ 复用
             if (!portInUse(enginePort)) return; // 默认端口空闲，直接用
             // 默认端口被非引擎服务占用：扫描 3081~3099 找空闲端口（通知端口 = enginePort+1 自动跟随）
             for (int p = 3081; p <= 3099; p++) {
                 if (!portInUse(p)) {
-                    Log.w(TAG, "port " + enginePort + " in use, using " + p + " instead");
+                    Log.w(TAG, "port " + enginePort + " occupied by non-DSH service, using " + p + " instead");
                     enginePort = p;
+                    saveEnginePort(p);
                     return;
                 }
             }
@@ -1887,18 +1933,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean healthOk() {
-        HttpURLConnection c = null;
-        try {
-            c = (HttpURLConnection) new URL(homeUrl() + "/").openConnection();
-            c.setConnectTimeout(1200);
-            c.setReadTimeout(1200);
-            int code = c.getResponseCode();
-            return code >= 200 && code < 500;
-        } catch (Exception e) {
-            return false;
-        } finally {
-            if (c != null) c.disconnect();
-        }
+        return isDshEngine(enginePort);
     }
 
     private void waitForServer() {
@@ -1910,7 +1945,9 @@ public class MainActivity extends Activity {
             setStatus("正在启动 DeepSeek Harness…（已等待 " + waited + " 秒）");
             try { Thread.sleep(1000); } catch (InterruptedException e) { return; }
         }
-        setStatus("引擎启动超时，请重启应用");
+        // 超时：带端口提示便于排查（node 日志已写入 files/dsh-web.log）
+        Log.e(TAG, "engine start timeout on port " + enginePort + ", check dsh-web.log");
+        setStatus("引擎启动超时（端口 " + enginePort + "），请重启应用");
         loadHome();
     }
 

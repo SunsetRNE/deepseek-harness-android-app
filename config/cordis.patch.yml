@@ -8,6 +8,12 @@
   disabled: true
 - id: bash-sandbox
   disabled: true
+# rc.2 新增：PowerShell 沙箱（Android 无 pwsh，禁用）
+- id: dsh-pwsh-sandbox
+  disabled: true
+# 会话日志导出按钮（右上角 session log，下载 ZIP）：移动端用不上，禁用留出空间
+- id: session-log-download
+  disabled: true
 - id: permission
   config:
     presets:
